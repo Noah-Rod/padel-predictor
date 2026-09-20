@@ -1,0 +1,66 @@
+name: Training pipeline
+
+on:
+  schedule:
+    # Weekly retrain, Monday 05:30 UTC -- after the weekend's tournaments have
+    # been ingested by the feature pipeline.
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
+  workflow_run:
+    # Also retrain right after a manual backfill has reshaped the feature store.
+    workflows: ["Feature pipeline"]
+    types: [completed]
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: training-pipeline
+  cancel-in-progress: false
+
+jobs:
+  train:
+    name: train, evaluate and promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # On a workflow_run trigger, only retrain when the feature pipeline succeeded.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    env:
+      PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
+      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI || 'sqlite:///mlflow.db' }}
+      MLFLOW_EXPERIMENT_NAME: ${{ vars.MLFLOW_EXPERIMENT_NAME || 'padel-predictor' }}
+      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+      HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.17"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Authenticate to Google Cloud
+        if: env.HAS_GCP == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Warn about an ephemeral tracking backend
+        if: ${{ !startsWith(vars.MLFLOW_TRACKING_URI, 'http') }}
+        run: |
+          echo "::warning::MLFLOW_TRACKING_URI is not a remote tracking server, so the run and the"
+          echo "::warning::registered model are discarded when the job ends."
+          echo "Set the MLFLOW_TRACKING_URI repository variable to a tracking server." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Train
+        run: uv run padel training-pipeline | tee -a "$GITHUB_STEP_SUMMARY"

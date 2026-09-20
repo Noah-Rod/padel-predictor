@@ -1,0 +1,46 @@
+# Non-secret configuration for all three FTI pipelines.
+# Secrets (API keys, credentials) come from the environment only -- see .env.example.
+
+ingestion:
+  # How many days of matches a normal (non-backfill) run pulls from the live source.
+  lookback_days: 7
+  # Request timeout in seconds for the live source.
+  timeout_seconds: 30
+  max_retries: 3
+
+features:
+  # Elo rating state shared by training and inference (see common/features.py).
+  elo_initial: 1500.0
+  elo_k_factor: 24.0
+  # Number of recent matches used for the rolling "form" feature.
+  form_window: 5
+  # Ordinal encoding of the tour tier; unknown tiers fall back to 0.
+  tier_levels:
+    major: 4
+    p1: 3
+    p2: 2
+    challenger: 1
+
+training:
+  # Fraction of the most recent matches held out as the test set (time-based split).
+  test_fraction: 0.2
+  # Minimum number of labelled matches before training is allowed to run.
+  min_training_rows: 200
+  random_state: 42
+  model:
+    # Passed to sklearn.ensemble.HistGradientBoostingClassifier.
+    max_iter: 300
+    learning_rate: 0.06
+    max_depth: 4
+    l2_regularization: 1.0
+    early_stopping: true
+  promotion:
+    # A new model only becomes champion if it beats the current one on this metric
+    # by at least `min_improvement` (log loss: lower is better).
+    metric: log_loss
+    higher_is_better: false
+    min_improvement: 0.002
+
+inference:
+  # How far ahead the batch inference pipeline looks for unplayed matches.
+  horizon_days: 7

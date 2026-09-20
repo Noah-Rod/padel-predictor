@@ -1,0 +1,50 @@
+# --- Secrets (never commit; see .env.example for the variable names) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+service-account*.json
+gcp-credentials*.json
+
+# --- Data: the feature store lives outside git ---
+data/
+*.parquet
+*.csv
+!tests/**/*.csv
+*.duckdb
+*.sqlite3
+
+# --- Experiment tracking & model artifacts ---
+mlruns/
+mlartifacts/
+mlflow.db
+models/
+*.pkl
+*.joblib
+*.onnx
+*.h5
+*.pt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
