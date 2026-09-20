@@ -19,11 +19,18 @@ the PDF before 23:59 — not the morning after.
 | --- | --- |
 | `architecture.svg` | The FTI diagram. Embedded in the root `README.md`; embed it in `proposal.pdf` too (the proposal must not use an ASCII diagram). |
 | `proposal.md` | Working draft of the proposal. Edit it, then export to `proposal.pdf`. |
+| `build_pdf.py` | Markdown to PDF export used for every milestone document. |
 | `milestone_summary_template.md` | Structure for each `ms<n>_summary.pdf`, including the response-to-reviewers format. |
 
 ## Exporting a draft to PDF
 
-Any Markdown-to-PDF route is fine. With Pandoc:
+The checked-in route renders with a headless Chromium and inlines the SVG diagram:
+
+```bash
+python docs/build_pdf.py docs/proposal.md      # writes docs/proposal.pdf
+```
+
+Any other Markdown-to-PDF route is fine too. With Pandoc:
 
 ```bash
 pandoc docs/proposal.md -o docs/proposal.pdf \
