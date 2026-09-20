@@ -1,0 +1,73 @@
+name: Feature pipeline
+
+on:
+  schedule:
+    # Every day at 04:15 UTC, after the previous day's matches have settled.
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+    inputs:
+      backfill_start:
+        description: "Backfill from this date (YYYY-MM-DD). Leave empty for a normal incremental run."
+        required: false
+        type: string
+      backfill_end:
+        description: "Backfill up to this date (YYYY-MM-DD)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two runs write the feature store at the same time.
+  group: feature-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ingest and build features
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PADEL_SOURCE: ${{ vars.PADEL_SOURCE || 'sample' }}
+      PADEL_API_BASE_URL: ${{ vars.PADEL_API_BASE_URL }}
+      PADEL_API_KEY: ${{ secrets.PADEL_API_KEY }}
+      PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
+      HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.17"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Authenticate to Google Cloud
+        if: env.HAS_GCP == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Warn about an ephemeral feature store
+        if: ${{ !startsWith(vars.PADEL_FEATURE_STORE_URI, 'gs://') }}
+        run: |
+          echo "::warning::PADEL_FEATURE_STORE_URI is not a gs:// URI, so this run writes to the"
+          echo "::warning::runner's local disk and the data is discarded when the job ends."
+          echo "Set the PADEL_FEATURE_STORE_URI repository variable to a gs:// bucket." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Backfill
+        if: inputs.backfill_start != '' && inputs.backfill_end != ''
+        run: |
+          uv run padel backfill \
+            --start "${{ inputs.backfill_start }}" \
+            --end "${{ inputs.backfill_end }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Incremental run
+        if: inputs.backfill_start == '' || inputs.backfill_end == ''
+        run: uv run padel feature-pipeline | tee -a "$GITHUB_STEP_SUMMARY"

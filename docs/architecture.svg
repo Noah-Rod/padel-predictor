@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 460" width="860" height="460"
+     role="img" aria-labelledby="title desc">
+  <title id="title">FTI architecture of the Padel Predictor</title>
+  <desc id="desc">A live source feeds the feature pipeline, which writes to the feature store.
+    The training pipeline reads the feature store and registers models to the model registry.
+    The inference pipeline loads the champion model and the latest features, and serves the UI.</desc>
+
+  <style>
+    .box   { stroke-width: 1.5; rx: 10; }
+    .pipe  { fill: #e0f2fe; stroke: #0284c7; }
+    .store { fill: #ede9fe; stroke: #7c3aed; }
+    .edge  { fill: #f1f5f9; stroke: #64748b; }
+    .flow  { stroke: #64748b; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+    .flow-alt { stroke: #7c3aed; stroke-width: 1.8; fill: none;
+                stroke-dasharray: 5 4; marker-end: url(#arrow-alt); }
+    text   { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+             fill: #0f172a; }
+    .h     { font-size: 15px; font-weight: 650; }
+    .s     { font-size: 12px; fill: #475569; }
+    .lbl   { font-size: 11.5px; fill: #475569; font-style: italic; }
+    .num   { font-size: 12px; font-weight: 700; fill: #0284c7; }
+
+    @media (prefers-color-scheme: dark) {
+      .pipe  { fill: #082f49; stroke: #38bdf8; }
+      .store { fill: #2e1065; stroke: #a78bfa; }
+      .edge  { fill: #1e293b; stroke: #94a3b8; }
+      .flow  { stroke: #94a3b8; }
+      .flow-alt { stroke: #a78bfa; }
+      text   { fill: #e2e8f0; }
+      .s     { fill: #94a3b8; }
+      .lbl   { fill: #94a3b8; }
+      .num   { fill: #38bdf8; }
+    }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+    </marker>
+    <marker id="arrow-alt" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/>
+    </marker>
+  </defs>
+
+  <!-- Live source -->
+  <rect class="box edge" x="40" y="26" width="200" height="58"/>
+  <text class="h" x="140" y="50" text-anchor="middle">Live source</text>
+  <text class="s" x="140" y="69" text-anchor="middle">tour results &amp; fixtures</text>
+
+  <!-- UI -->
+  <rect class="box edge" x="620" y="26" width="200" height="58"/>
+  <text class="h" x="720" y="50" text-anchor="middle">UI + API</text>
+  <text class="s" x="720" y="69" text-anchor="middle">Streamlit · FastAPI</text>
+
+  <!-- 1. Feature pipeline -->
+  <rect class="box pipe" x="40" y="150" width="200" height="86"/>
+  <text class="num" x="60" y="174">1</text>
+  <text class="h" x="140" y="180" text-anchor="middle">Feature pipeline</text>
+  <text class="s" x="140" y="201" text-anchor="middle">daily cron · backfill</text>
+  <text class="s" x="140" y="220" text-anchor="middle">ingest → compute → write</text>
+
+  <!-- 2. Training pipeline -->
+  <rect class="box pipe" x="330" y="150" width="200" height="86"/>
+  <text class="num" x="350" y="174">2</text>
+  <text class="h" x="430" y="180" text-anchor="middle">Training pipeline</text>
+  <text class="s" x="430" y="201" text-anchor="middle">weekly · on demand</text>
+  <text class="s" x="430" y="220" text-anchor="middle">train → evaluate → promote</text>
+
+  <!-- 3. Inference pipeline -->
+  <rect class="box pipe" x="620" y="150" width="200" height="86"/>
+  <text class="num" x="640" y="174">3</text>
+  <text class="h" x="720" y="180" text-anchor="middle">Inference pipeline</text>
+  <text class="s" x="720" y="201" text-anchor="middle">daily · on demand</text>
+  <text class="s" x="720" y="220" text-anchor="middle">load champion → predict</text>
+
+  <!-- Feature store -->
+  <rect class="box store" x="185" y="308" width="200" height="72"/>
+  <text class="h" x="285" y="334" text-anchor="middle">Feature Store</text>
+  <text class="s" x="285" y="354" text-anchor="middle">versioned Parquet</text>
+  <text class="s" x="285" y="371" text-anchor="middle">local dir or gs://</text>
+
+  <!-- Model registry -->
+  <rect class="box store" x="475" y="308" width="200" height="72"/>
+  <text class="h" x="575" y="334" text-anchor="middle">Model Registry</text>
+  <text class="s" x="575" y="354" text-anchor="middle">MLflow</text>
+  <text class="s" x="575" y="371" text-anchor="middle">alias @champion</text>
+
+  <!-- Flows -->
+  <path class="flow" d="M 140 84 V 146"/>
+  <text class="lbl" x="150" y="120">fetch</text>
+
+  <path class="flow" d="M 178 238 L 248 304"/>
+  <text class="lbl" x="120" y="285">write</text>
+
+  <path class="flow" d="M 322 304 L 392 238"/>
+  <text class="lbl" x="352" y="285">read</text>
+
+  <path class="flow" d="M 468 238 L 538 304"/>
+  <text class="lbl" x="398" y="285">register</text>
+
+  <path class="flow" d="M 612 304 L 682 238"/>
+  <text class="lbl" x="628" y="288">load best</text>
+
+  <path class="flow" d="M 720 146 V 88"/>
+  <text class="lbl" x="730" y="120">serve</text>
+
+  <!-- Feature store also serves inference: same feature code, no training/serving skew -->
+  <path class="flow-alt" d="M 285 382 V 420 H 720 V 240"/>
+  <text class="lbl" x="500" y="438" text-anchor="middle">features at inference time (same feature code)</text>
+</svg>
