@@ -32,7 +32,7 @@ code { font-family: "Liberation Mono", "DejaVu Sans Mono", monospace; font-size:
 table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 3pt 0 5pt 0; }
 th, td { border: 1px solid #bbb; padding: 2pt 4pt; vertical-align: top; text-align: left; }
 th { background: #f0f0f0; }
-img, svg { width: 100%; height: auto; display: block; margin: 3pt 0 4pt 0; }
+img, svg { width: 92%; height: auto; display: block; margin: 3pt auto 4pt auto; }
 a { color: #111; text-decoration: none; }
 """
 
