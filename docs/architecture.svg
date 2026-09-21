@@ -93,7 +93,7 @@
   <text x="925" y="442" text-anchor="middle" fill="#6b7280" font-size="11">upcoming matches with P(A wins),</text>
   <text x="925" y="457" text-anchor="middle" fill="#6b7280" font-size="11">weekly accuracy chart</text>
   <text x="925" y="481" text-anchor="middle" fill="#4b5563">FastAPI /predict (optional)</text>
-  <text x="925" y="504" text-anchor="middle" fill="#6b7280" font-size="11">users: fans, fantasy players</text>
+  <text x="925" y="504" text-anchor="middle" fill="#6b7280" font-size="11">users: padel enthusiasts</text>
 
   <!-- orchestration arrows -->
   <line x1="375" y1="59" x2="375" y2="93" stroke="#6366f1" stroke-width="1.5" marker-end="url(#arrv)"/>
