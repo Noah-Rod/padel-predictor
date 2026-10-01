@@ -1,127 +1,51 @@
-# Padel Predictor — Project Proposal
+# Project Proposal — Padel Predictor: pre-match win probabilities for the Premier Padel / FIP tour
 
-> **Working draft for `docs/proposal.pdf` (MS1, due Thu 01.10.2026, 23:59).**
->
-> The sections below match the four graded sections of the proposal and are
-> pre-filled from the system in this repository. Everything marked **`DECIDE:`**
-> is a decision only you can make — above all the live data source. Rewrite this
-> in your own words before exporting: you must be able to defend every sentence
-> at the oral exam. Delete this quote block before exporting.
+**Noah Rodriguez** · [github.com/Noah-Rod/padel-predictor](https://github.com/Noah-Rod/padel-predictor) (public)
 
-## 1. Problem statement
+## 1 Problem statement
 
-Predict the **winner of a professional padel match before it is played**.
+For every scheduled main-draw match on the Premier Padel tour (Major, P1, P2, Finals) and, where the feed covers them, the FIP Platinum and Gold tiers, men's and women's draws, predict the probability that team A beats team B, for padel enthusiasts who want to know who is favoured, and by how much, before the day's matches start.
 
-- **Target.** For a scheduled match between team A and team B (two players each),
-  the probability that team A wins. Padel matches have no draws, so this is a
-  binary classification with a calibrated probability.
-- **Horizon.** Predictions are made for every fixture up to **7 days ahead**, and
-  refreshed daily as results and fixtures arrive.
-- **Scope.** Professional tour doubles matches only. Not amateur or club play,
-  not set-by-set or in-play prediction.
-- **Success criterion.** Beat an **Elo baseline** on a chronological holdout of
-  the most recent 20% of matches. The Elo baseline predicts the higher-rated
-  pair using the Elo expectation itself as its probability. The model must
-  improve **log loss** over that baseline; accuracy and Brier score are reported
-  alongside. A majority-class baseline is logged as a floor.
-  **`DECIDE:`** fix a concrete number once you have real data, e.g.
-  "log loss ≤ 0.46 vs. 0.49 for Elo".
+Horizon: every morning, the system predicts every upcoming match whose two pairs are already known. First-round matches are known from the day the draw is published (up to seven days ahead); later rounds are known once the previous round is decided, usually the day before. Until a match starts, its prediction is refreshed every morning with the latest Data. Evaluation and monitoring score only the last prediction made before the match starts.
 
-Why this criterion: a strong favourite wins most padel matches, so raw accuracy
-flatters any model. Log loss against Elo asks the real question — does the
-system know anything beyond who is higher rated?
+Scope: the 2026/27 season live, backfilled with completed draws from January 2023. Qualifying rounds and Silver, Rise and Promotion events are excluded (too many players with no history).
 
-## 2. Originality and motivation
+Success criterion: on an out-of-time test set (the most recent 20 % of matches, cut at a tournament boundary), the model's log loss must be lower than the baseline's. The baseline is the data provider's own Elo: padelapi.org publishes a per-player `elo` and the win probability, which it reports at 71.8 % accuracy and 0.517 log loss on 7 500 matches. If the model only matches the provider's rating, it has added nothing.
 
-**`DECIDE:` write this section yourself.** It is graded on the specific argument
-you make, and a generic answer scores poorly. Points worth making:
+The criterion defines success; it never blocks serving. The provider's Elo is registered as the first champion, so predictions are live from day one. A trained candidate replaces the champion only if its log loss on the same test set is lower; if none ever does, the system keeps serving the provider's Elo.
 
-- Padel is under-served compared to tennis or football prediction: there is no
-  standard public dataset, so the data engineering is genuine rather than a
-  download.
-- Doubles introduces a modelling feature singles sports do not have: **pair
-  chemistry**. Ratings must be attributed to individual players while results
-  only exist for pairs, and partnerships change between tournaments.
-- Check the past projects on [mlops-lab.ch](https://mlops-lab.ch) and the
-  [KTH ID2223](https://id2223kth.github.io) projects, and state in one sentence
-  what yours does differently.
+## 2 Originality & motivation
 
-## 3. Data source and features
+I play padel and follow the Premier Padel tour. The useful version of this system is the one I would open on a Wednesday to see who is favoured in each of Thursday's round-of-16 matches.
 
-### Source
+Checked against mlops-lab.ch (FS26: 15 projects, three sport-performance forecasters for golf, high jump and kiteboarding, no head-to-head match predictor) and the KTH ID2223 showcases 2022/23 to 2025/26 (134 projects, eleven sports or game predictors: football ×3, Fantasy Premier League, NHL ×2, chess, Clash Royale, League of Legends ×2, transfer values). None covers padel, tennis or any doubles sport. What makes this different from the tennis predictors it resembles, and from the provider's own Elo: padel is doubles-only and pairs split and re-form every few months, so there is no stable team entity to rate. A rating answers "how strong are these four players"; this system asks what the rating misses: how long the pair has played together (`partnership`), current form, rest, tier and the official ranking as it stood on match day. The bar is set by the provider's Elo, which already averages two players into a pair, so the project only succeeds if those signals carry information beyond a rating.
 
-**`DECIDE:` name the live source and confirm its terms of use before MS2.**
-This is the single biggest open risk in the project — pick it early and check
-that it exposes both finished results *and* upcoming fixtures. The ingestion
-layer is already written against an interchangeable adapter interface
-(`src/padel_predictor/features/sources.py`), so swapping sources means editing
-one method, `HttpMatchSource.parse_records`.
+## 3 Data source & features
 
-- **Update frequency.** Tournaments run Wednesday to Sunday; the feature
-  pipeline runs **daily at 04:15 UTC** and fetches a window reaching 7 days back
-  and 7 days forward, so late-corrected results are re-ingested and new fixtures
-  appear.
-- **Development source.** A deterministic synthetic adapter (`PADEL_SOURCE=sample`)
-  produces the same schema offline. CI and a fresh clone run on it, so the
-  pipeline is testable without credentials.
+**Source.** [padelapi.org](https://padelapi.org) (REST, JSON, bearer token; run by Fantasy Padel Tour): seasons → tournaments → matches, plus players and rankings, with consistent player IDs across Premier Padel and the FIP Tour. Matches are read per tournament with an `updated_after` filter; each carries `status`, `draw` (main / qualy), `scheduled_at`, round and the four player IDs. I have subscribed to the paid tier: the free tier only has the last six months of results and the current ranking, while the paid tier adds the full archive (complete draws for Premier Padel and FIP from 2023) and the ranking-history endpoint (weekly snapshots of official points and provider Elo per player). A daily sync of the running tournaments costs under 50 requests, well inside even the free tier's 2 000/day.
 
-### Label
+**Update frequency and volume.** The feed updates during tournaments, which usually run Wednesday to Sunday. Estimated 3 000 to 4 000 labelled main-draw matches per season across both categories, roughly 10 000 since 2023, growing by 60 to 120 per tournament week. Should the archive prove shallower, history starts six months before the poller and the test set grows with it: this degrades the numbers, not the system.
 
-`winner ∈ {A, B}`, taken from the completed match record at the source. A
-fixture that has not been played carries a null winner — those rows are exactly
-what the inference pipeline predicts.
+**Outages.** The data comes from an official API, not scraping, so no second source is needed. If padelapi.org is down, the next daily run catches up through `updated_after` and the UI keeps serving the last predictions.
 
-### Features
+**Label.** `team_a_won` ∈ {0, 1}, from the source's winner field, for matches with `status = finished` only; `walkover`, `retired` and `bye` are excluded from training and evaluation. Team A / B is assigned by a hash of the pair names, never by seeding, so the label is balanced by construction (≈ 50/50) and no rare-class handling is needed. Nothing in the feature row is derived from the result: set scores, duration and status of the match itself are used for filtering only and never joined into features.
 
-All six are differences between the two teams, computed by replaying match
-history in chronological order
-(`src/padel_predictor/common/features.py`):
+**Initial features** (team A minus team B unless stated), each computed from state strictly before the match: `elo_diff` (in-house player Elo, replayed match by match), `rank_points_diff` (official FIP points from the last weekly snapshot before the match), `form_diff` (recent win rate per player), `rest_days_diff`, `partnership_diff` (matches the pair has played together), `tier_level`, `round`. The set is extended after MS2 once ablations show what carries signal; candidates are head-to-head record, margin-weighted Elo and days into the tournament.
 
-| Feature | Meaning |
-| --- | --- |
-| `elo_diff` | Team Elo (mean of its two players) difference |
-| `rank_points_diff` | Combined tour ranking points difference |
-| `form_diff` | Win rate over each player's last 5 matches |
-| `rest_days_diff` | Days since the team's freshest player last played |
-| `partnership_diff` | Matches this exact pair has already played together |
-| `tier_level` | Tour tier as an ordinal (challenger → major) |
+**Leakage controls.** Out-of-time split, never inside a tournament. Elo, form, rest and partnership state is updated only *after* a match's feature row is built; a unit test asserts that flipping a match's winner does not change its own features. Rankings and provider Elo are joined as-of the match date, never the current values. Re-ingested matches are de-duplicated on `match_id`, keeping the newest record, so a fixture that later completes becomes one labelled row.
 
-### Leakage and split
-
-- **No leakage by construction.** Every feature row is computed from rolling
-  state that contains only matches finishing *strictly earlier*; the match's own
-  result is folded into the state only after its row is built. A unit test
-  asserts this: flipping a match's winner must not change that match's features.
-- **Chronological split.** The oldest 80% of labelled matches train, the newest
-  20% test. A random split would let later matches inform earlier predictions
-  and inflate every metric.
-- **One feature definition.** Training and inference import the same
-  `build_feature_frame`, so there is no training–serving skew.
-
-## 4. System design
+## 4 System design
 
 ![FTI architecture](architecture.svg)
 
-Three automated pipelines:
+Planned stack, revisited at each milestone with the review feedback. Three pipelines share one feature-definition module, `src/padel_predictor/common/features.py`, so training and inference cannot drift.
 
-1. **Feature pipeline** — daily GitHub Actions cron plus a date-range backfill.
-   Ingests from the live source, rebuilds features, writes a dated snapshot.
-2. **Training pipeline** — weekly cron plus on demand. Reads the feature store,
-   trains and evaluates against the Elo baseline, logs to MLflow, and promotes
-   the model to the `@champion` alias only if it beats the current champion.
-3. **Inference pipeline** — daily cron plus on demand from the UI. Loads the
-   champion model and serves predictions for upcoming fixtures.
+| Layer | Choice | Why |
+| --- | --- | --- |
+| Feature store | Hopsworks (serverless) | Feature groups with event time and a feature view for as-of joins; hosted, so the data survives between GitHub Actions runs, which start empty every time. |
+| Experiment tracking & registry | Weights & Biases | Runs, metrics, model versions with a `champion` alias and the weekly monitoring charts in one hosted tool. |
+| Orchestration | GitHub Actions (cron + `workflow_dispatch`) | Feature daily 04:15 UTC, training weekly Monday, inference daily 06:00 UTC; nothing to host. |
+| Serving | Google Cloud Run | Streamlit UI reading the daily predictions table; scales to zero. |
+| Monitoring | Inference pipeline → W&B | Rolling weekly log loss and accuracy on newly finished matches (last pre-match prediction each), shown in the UI. |
 
-### Stack
-
-| Concern | Choice |
-| --- | --- |
-| Feature store | Versioned Parquet snapshots, local dir or `gs://` bucket |
-| Tracking & registry | MLflow, models addressed by `@champion` alias |
-| Model | `HistGradientBoostingClassifier` on six engineered features |
-| Orchestration | GitHub Actions (cron + `workflow_dispatch`) |
-| Serving | FastAPI + Streamlit, one Docker image |
-| Deployment | **`DECIDE:`** Cloud Run or a Hugging Face Space — both are wired in `.github/workflows/deploy.yml` |
-| Reproducibility | `uv.lock`, pinned Docker image, unit tests in CI |
-
-**Repository:** https://github.com/Noah-Rod/padel-predictor (public)
+**Stretch, explicitly optional, only after the core is live:** FastAPI `/predict` for ad-hoc matchups; Evidently drift reports on `elo_diff` and `rank_points_diff`; a Grafana dashboard; Terraform for the bucket and the Cloud Run service. The repository is public, CI runs lint and tests on every push, and milestones are tagged `ms1` to `ms4`.
