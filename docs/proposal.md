@@ -4,17 +4,15 @@
 
 ## 1 Problem statement
 
-For every scheduled **main-draw match** on the **Premier Padel** tour (Major, P1, P2, Finals) and, where the feed covers them, the **FIP Platinum and Gold** tiers, men's and women's draws, predict the **probability that team A beats team B**. Predictions are produced **daily for all fixtures up to seven days ahead**, i.e. from the moment a draw is published until the match starts, and are served to **padel enthusiasts** who want to know, before a session starts, who is favoured and by how much.
+For every scheduled **main-draw match** on the **Premier Padel** tour (Major, P1, P2, Finals) and, where the feed covers them, the **FIP Platinum and Gold** tiers, men's and women's draws, predict the **probability that team A beats team B**, for **padel enthusiasts** who want to know who is favoured, and by how much, before the day's matches start.
+
+Horizon: **every morning**, the system predicts every upcoming match whose two pairs are already known. First-round matches are known from the day the draw is published (up to **seven days ahead**); later rounds are known once the previous round is decided, usually the day before. Until a match starts, its prediction is refreshed every morning with the latest Elo, form and rest. Evaluation and monitoring score **only the last prediction made before the match starts**.
 
 Scope: the 2026/27 season live, backfilled with completed draws from January 2023. Qualifying rounds and Silver, Rise and Promotion events are excluded (too many players with no history).
 
-Success criterion, on an out-of-time test set (the most recent 20 % of matches, cut at a tournament boundary), against three baselines:
+Success criterion: on an out-of-time test set (the most recent 20 % of matches, cut at a tournament boundary), the model's **log loss must be lower than the baseline's**. The baseline is **the data provider's own Elo**: padelapi.org publishes a per-player `elo` and the win probability P(A) = 1 / (1 + 10^((R_B − R_A)/400)), which it reports at 71.8 % accuracy and 0.517 log loss on 7 500 matches. If the model only matches the provider's rating, it has added nothing.
 
-- **rank favourite** (the team with more FIP ranking points wins): accuracy must be higher, and **≥ 70 %** in absolute terms;
-- **replayed Elo** (P(A) = 1 / (1 + 10^((R_B − R_A)/400)) from the same in-house player ratings): log loss must be lower;
-- **the data provider's own Elo simulation** (padelapi.org publishes a per-player `elo` and a win-probability formula that it reports at 71.8 % accuracy and 0.517 log loss on 7 500 matches): log loss must be lower on my test set. If the model only matches the provider's rating, it has added nothing.
-
-A candidate that fails any check is not promoted; the current champion keeps serving.
+The criterion defines success; it never blocks serving. The provider's Elo is registered as the first champion, so predictions are live from day one. A trained candidate replaces the champion only if its log loss on the same test set is lower; if none ever does, the system keeps serving the provider's Elo.
 
 ## 2 Originality & motivation
 
@@ -24,11 +22,11 @@ Checked against mlops-lab.ch (FS26: 15 projects, three sport-performance forecas
 
 ## 3 Data source & features
 
-**Source.** [padelapi.org](https://padelapi.org) (REST, JSON, bearer token; run by Fantasy Padel Tour): seasons → tournaments → matches, plus players and rankings, with consistent player IDs across Premier Padel and the FIP Tour. Matches are read per tournament with an `updated_after` filter; each carries `status`, `draw` (main / qualy), `scheduled_at`, round and the four player IDs. Free tier: 50 000 requests/month, 10/min, 2 000/day; schedules, results of the last six months and the current ranking only. The paid tier adds the full archive (complete draws for Premier Padel and FIP from 2023) and the **ranking-history endpoint** (weekly snapshots of official points and provider Elo per player, hidden on the free plan). I subscribe for the backfill, or use the provider's academic access if granted first. A daily sync of the running tournaments costs under 50 requests, so the live pipeline stays inside the free quota.
+**Source.** [padelapi.org](https://padelapi.org) (REST, JSON, bearer token; run by Fantasy Padel Tour): seasons → tournaments → matches, plus players and rankings, with consistent player IDs across Premier Padel and the FIP Tour. Matches are read per tournament with an `updated_after` filter; each carries `status`, `draw` (main / qualy), `scheduled_at`, round and the four player IDs. I have subscribed to the paid tier: the free tier only has the last six months of results and the current ranking, while the paid tier adds the full archive (complete draws for Premier Padel and FIP from 2023) and the **ranking-history endpoint** (weekly snapshots of official points and provider Elo per player). A daily sync of the running tournaments costs under 50 requests, well inside even the free tier's 2 000/day.
 
 **Update frequency and volume.** The feed updates during tournaments, which usually run Wednesday to Sunday. Estimated 3 000 to 4 000 labelled main-draw matches per season across both categories, roughly 10 000 since 2023, growing by 60 to 120 per tournament week. Should the archive prove shallower, history starts six months before the poller and the test set grows with it: this degrades the numbers, not the system.
 
-**Fallback.** Scraping padelfip.com is ruled out: its terms of use prohibit "data mining, robots or similar data gathering or extraction methods" (padelfip.com/legal, checked 21.09.2026). The fallback is the per-event Wikipedia articles (e.g. *2025 Madrid P1*), read through the MediaWiki API under CC BY-SA behind the same `MatchSource` interface; they carry results but no rankings or fixtures, so in fallback mode the ranking features freeze at their last snapshot and predictions start when the draw is published. Second line: the last good feature-store snapshot plus the synthetic source CI already runs; every ingested match is also kept as local CSV, as the provider's terms allow.
+**Outages.** The data comes from an official API, not scraping, so no second source is needed. If padelapi.org is down, the next daily run catches up through `updated_after` and the UI keeps serving the last predictions.
 
 **Label.** `team_a_won` ∈ {0, 1}, from the source's winner field, for matches with `status = finished` only; `walkover`, `retired` and `bye` are excluded from training and evaluation. Team A / B is assigned by a hash of the pair names, never by seeding, so the label is balanced by construction (≈ 50/50) and no rare-class handling is needed. Nothing in the feature row is derived from the result: set scores, duration and status are used for filtering only and never joined into features.
 
@@ -44,10 +42,10 @@ Planned stack, revisited at each milestone with the review feedback. Three pipel
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| Feature store | **Hopsworks** (serverless) | Feature groups with event time and a feature view for as-of joins; survives ephemeral CI runners. Parquet on GCS with the same schema stays as the CI/offline backend. |
+| Feature store | **Hopsworks** (serverless) | Feature groups with event time and a feature view for as-of joins; hosted, so the data survives between GitHub Actions runs, which start empty every time. |
 | Experiment tracking & registry | **Weights & Biases** | Runs, metrics, model versions with a `champion` alias and the weekly monitoring charts in one hosted tool. |
 | Orchestration | **GitHub Actions** (cron + `workflow_dispatch`) | Feature daily 04:15 UTC, training weekly Monday, inference daily 06:00 UTC; nothing to host. |
 | Serving | **Google Cloud Run** | Streamlit UI reading the daily predictions table; scales to zero. |
-| Monitoring | Inference pipeline → W&B | Rolling weekly log loss and accuracy on newly finished matches, shown in the UI. |
+| Monitoring | Inference pipeline → W&B | Rolling weekly log loss and accuracy on newly finished matches (last pre-match prediction each), shown in the UI. |
 
 **Stretch, explicitly optional, only after the core is live:** FastAPI `/predict` for ad-hoc matchups; Evidently drift reports on `elo_diff` and `rank_points_diff`; a Grafana dashboard; Terraform for the bucket and the Cloud Run service. The repository is public, CI runs lint and tests on every push, and milestones are tagged `ms1` to `ms4`.

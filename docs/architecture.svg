@@ -24,9 +24,6 @@
   <text x="120" y="174" text-anchor="middle">results · schedules · draws</text>
   <text x="120" y="192" text-anchor="middle">weekly rankings</text>
   <text x="120" y="218" text-anchor="middle" fill="#6b7280" font-size="11">updates Wed–Sun, tour weeks</text>
-  <rect x="20" y="250" width="200" height="46" rx="8" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5 4"/>
-  <text x="120" y="269" text-anchor="middle" fill="#4b5563">fallback: Wikipedia event pages</text>
-  <text x="120" y="286" text-anchor="middle" fill="#4b5563">MediaWiki API · CC BY-SA</text>
 
   <!-- feature pipeline -->
   <rect x="250" y="95" width="250" height="205" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
@@ -50,7 +47,7 @@
   <text x="542" y="221">predictions</text>
   <text x="542" y="236" fill="#6b7280" font-size="11">key match_id · run_date</text>
   <text x="650" y="262" text-anchor="middle" fill="#92400e">feature view = point-in-time join</text>
-  <text x="650" y="284" text-anchor="middle" fill="#6b7280" font-size="11">CI / offline: Parquet on GCS, same schema</text>
+  <text x="650" y="284" text-anchor="middle" fill="#6b7280" font-size="11">hosted · serverless</text>
 
   <!-- training pipeline -->
   <rect x="800" y="95" width="250" height="205" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
@@ -59,9 +56,9 @@
   <text x="812" y="160">• read feature view (labelled rows)</text>
   <text x="812" y="179">• out-of-time split, cut at tournament</text>
   <text x="812" y="198">• train gradient-boosted classifier</text>
-  <text x="812" y="217">• evaluate vs Elo + rank favourite</text>
+  <text x="812" y="217">• evaluate vs provider Elo</text>
   <text x="812" y="236">• log run, register version</text>
-  <text x="812" y="255">• promote to champion only if better</text>
+  <text x="812" y="255">• promote only if it beats champion</text>
 
   <!-- stretch -->
   <rect x="20" y="380" width="200" height="100" rx="8" fill="#ffffff" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="5 4"/>
@@ -77,13 +74,13 @@
   <text x="262" y="445">• load champion model</text>
   <text x="262" y="464">• score fixtures up to 7 days ahead</text>
   <text x="262" y="483">• write predictions</text>
-  <text x="262" y="502">• score last week's finished matches</text>
+  <text x="262" y="502">• score last pre-match predictions</text>
 
   <!-- W&B -->
   <rect x="530" y="380" width="240" height="95" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.5"/>
   <text x="650" y="403" text-anchor="middle" font-weight="bold" fill="#9d174d">Weights &amp; Biases</text>
   <text x="650" y="424" text-anchor="middle">experiments · model registry</text>
-  <text x="650" y="441" text-anchor="middle">alias: champion</text>
+  <text x="650" y="441" text-anchor="middle">alias: champion (provider Elo first)</text>
   <text x="650" y="460" text-anchor="middle">weekly log loss / accuracy charts</text>
 
   <!-- serving -->

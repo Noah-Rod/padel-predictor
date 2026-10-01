@@ -63,7 +63,7 @@ def main(src: str) -> None:
     chrome = os.environ.get("CHROME") or shutil.which("chromium") or shutil.which("google-chrome")
     if not chrome:
         sys.exit("no Chromium found; set CHROME=/path/to/chrome")
-    pdf_path = md_path.with_suffix(".pdf")
+    pdf_path = md_path.with_suffix(".pdf").resolve()
     subprocess.run(
         [
             chrome,
