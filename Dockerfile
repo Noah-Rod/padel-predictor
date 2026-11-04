@@ -22,14 +22,14 @@ WORKDIR /app
 
 # Dependencies first: this layer is cached until uv.lock changes.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --extra hopsworks --no-install-project
 
 # Then the project itself.
 COPY README.md ./
 COPY src/ src/
 COPY config/ config/
 COPY ui/ ui/
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra hopsworks
 
 # --- runtime stage: the built environment, without the compiler ----------------
 FROM python:3.11-slim AS runtime
