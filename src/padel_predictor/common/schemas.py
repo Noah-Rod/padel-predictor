@@ -40,6 +40,22 @@ PLAYER_COLUMNS: tuple[str, ...] = (
 
 VALID_WINNERS: frozenset[str] = frozenset({"A", "B"})
 
+#: Draw order of the round labels. Matches without a start time share their
+#: day's midnight, and a pair plays several rounds of one event in a few days,
+#: so on equal ``played_at`` the earlier round has to be replayed first.
+ROUND_ORDER: dict[str, int] = {"G": 0, "R64": 1, "R32": 2, "R16": 3, "QF": 4, "SF": 5, "F": 6}
+
+
+def chronological(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort matches by start time, then round, then ``match_id``."""
+    round_rank = df["round"].map(ROUND_ORDER).fillna(-1) if "round" in df else 0
+    return (
+        df.assign(_round_rank=round_rank)
+        .sort_values(["played_at", "_round_rank", "match_id"], kind="stable")
+        .drop(columns="_round_rank")
+        .reset_index(drop=True)
+    )
+
 
 class SchemaError(ValueError):
     """Raised when a frame does not satisfy the raw-match contract."""
@@ -78,7 +94,7 @@ def normalise_raw_matches(df: pd.DataFrame) -> pd.DataFrame:
     if out["match_id"].isna().any():
         raise SchemaError("matches with a null match_id")
 
-    return out.sort_values(["played_at", "match_id"], kind="stable").reset_index(drop=True)
+    return chronological(out)
 
 
 def deduplicate_matches(df: pd.DataFrame) -> pd.DataFrame:
@@ -95,7 +111,7 @@ def deduplicate_matches(df: pd.DataFrame) -> pd.DataFrame:
     if "ingested_at" in out.columns:
         out = out.sort_values("ingested_at", kind="stable")
     out = out.drop_duplicates(subset="match_id", keep="last")
-    return out.sort_values(["played_at", "match_id"], kind="stable").reset_index(drop=True)
+    return chronological(out)
 
 
 def orient_teams(df: pd.DataFrame) -> pd.DataFrame:

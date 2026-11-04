@@ -142,3 +142,15 @@ def test_rankings_without_publication_time_are_rejected():
     )
     with pytest.raises(SchemaError, match="published_at"):
         normalise_raw_rankings(rows)
+
+
+def test_rounds_on_the_same_timestamp_replay_in_draw_order():
+    """Without a start time, a day's rounds share midnight; QF must not precede R16."""
+    rows = [
+        make_match("1", "2026-03-07", ("A1", "A2"), ("B1", "B2")),
+        make_match("2", "2026-03-07", ("A1", "A2"), ("C1", "C2")),
+    ]
+    frame = pd.DataFrame(rows)
+    frame["round"] = ["QF", "R16"]
+    out = normalise_raw_matches(frame)
+    assert out["round"].tolist() == ["R16", "QF"]
