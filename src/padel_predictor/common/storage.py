@@ -217,7 +217,12 @@ def hopsworks_project_name(uri: str) -> str:
 @lru_cache(maxsize=4)
 def _feature_store(project: str) -> Any:
     """Log in once per process and return the project's feature store."""
-    import hopsworks
+    try:
+        import hopsworks
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "hopsworks:// needs the optional dependency: uv sync --extra hopsworks"
+        ) from exc
 
     from padel_predictor.common.config import get_settings
 

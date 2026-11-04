@@ -90,7 +90,7 @@ offline, so a fresh clone runs the whole system end to end.
 git clone https://github.com/Noah-Rod/padel-predictor.git
 cd padel-predictor
 cp .env.example .env          # edit only if you use a live source
-uv sync --all-extras
+uv sync --all-extras          # Windows without a C compiler: plain `uv sync` (see below)
 
 # 1. Feature pipeline: load history, then keep it current
 uv run padel backfill --start 2025-09-01 --end 2026-09-01
@@ -115,6 +115,13 @@ uv run padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 0
 ```
 
 `make help` lists the same steps as short targets.
+
+**Windows.** The Hopsworks client depends on `twofish`, which only ships as
+source code and needs Microsoft C++ Build Tools to compile. It is therefore an
+optional extra: plain `uv sync` installs everything else, and the offline
+store, the tests and the live padelapi.org source all run without it. Only
+`PADEL_FEATURE_STORE_URI=hopsworks://...` needs `uv sync --extra hopsworks`;
+the scheduled workflows and the Docker image install it.
 
 ### With Docker
 
