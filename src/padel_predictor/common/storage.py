@@ -178,7 +178,9 @@ class FeatureGroupSpec:
     primary_key: tuple[str, ...]
     event_time: str
     description: str
-    version: int = 1
+    # v1 groups were created as Kafka-streamed groups, whose upload needs a
+    # keystore pyjks cannot decrypt; v2 groups are DELTA and written directly.
+    version: int = 2
 
 
 FEATURE_GROUPS: dict[str, FeatureGroupSpec] = {
@@ -272,6 +274,9 @@ def _hopsworks_write(df: pd.DataFrame, base_uri: str, dataset: str, snapshot_dat
         primary_key=list(spec.primary_key),
         event_time=spec.event_time,
         online_enabled=False,
+        # DELTA offline-only groups are written by the python engine directly
+        # (hops-deltalake); any other format streams the upload through Kafka.
+        time_travel_format="DELTA",
     )
     group.insert(to_hopsworks_frame(df, dataset, snapshot_date), wait=True)
     logger.info("upserted %d rows into %s", len(df), target)
