@@ -27,7 +27,8 @@ jobs:
   run:
     name: ingest and build features
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # A backfill is paced under the provider's rate limit: about 20 min per year.
+    timeout-minutes: 120
     env:
       PADEL_SOURCE: ${{ vars.PADEL_SOURCE || 'sample' }}
       PADEL_API_BASE_URL: ${{ vars.PADEL_API_BASE_URL }}
