@@ -56,3 +56,30 @@ def test_backfill_rejects_a_reversed_range(settings, config):
         pipeline.backfill(
             start=dt.date(2026, 6, 30), end=dt.date(2026, 4, 1), settings=settings, config=config
         )
+
+
+def test_run_stores_rankings_and_the_provider_baseline(settings, config):
+    pipeline.run(lookback_days=30, horizon_days=7, settings=settings, config=config)
+
+    rankings = storage.read_dataset(settings.feature_store_uri, storage.RAW_RANKINGS)
+    features = storage.read_latest_snapshot(settings.feature_store_uri, storage.FEATURES)
+    assert not rankings.empty
+    assert features["provider_elo_prob"].notna().any()
+    # Every joined snapshot was published before the match it was joined to.
+    joined = features.dropna(subset=["ranking_published_at"])
+    assert (joined["ranking_published_at"] < joined["played_at"]).all()
+
+
+def test_free_plan_backfill_is_clamped_to_six_months(monkeypatch, config):
+    from padel_predictor.common.config import Settings
+
+    monkeypatch.setenv("PADEL_SOURCE", "http")
+    monkeypatch.setenv("PADEL_API_PLAN", "free")
+    today = dt.datetime.now(dt.UTC).date()
+    clamped = pipeline._clamp_to_plan(today - dt.timedelta(days=900), Settings(), config)
+    assert clamped == today - dt.timedelta(days=config.ingestion.free_plan_history_days)
+
+
+def test_paid_plan_backfill_is_not_clamped(config, settings):
+    start = dt.date(2023, 1, 1)
+    assert pipeline._clamp_to_plan(start, settings, config) == start

@@ -5,6 +5,7 @@ developer all start the same code the same way::
 
     padel feature-pipeline
     padel backfill --start 2026-01-01 --end 2026-09-01
+    padel data-report
     padel training-pipeline
     padel inference-pipeline
     padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 04"
@@ -71,6 +72,14 @@ def backfill(
         chunk_days=chunk_days,
     )
     typer.echo(result.summary())
+
+
+@app.command("data-report")
+def data_report() -> None:
+    """Counts per season and tier, and the baselines on the out-of-time test set."""
+    from padel_predictor.features.report import build_report
+
+    typer.echo(build_report().to_markdown())
 
 
 @app.command("training-pipeline")

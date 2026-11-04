@@ -51,7 +51,7 @@ def time_split(features: pd.DataFrame, test_fraction: float = 0.2) -> Split:
         raise ValueError(
             f"test_fraction {test_fraction} leaves no training rows for {len(data)} matches"
         )
-    cutoff = len(data) - n_test
+    cutoff = _tournament_boundary(data, len(data) - n_test)
     train, test = data.iloc[:cutoff], data.iloc[cutoff:]
 
     return Split(
@@ -64,6 +64,23 @@ def time_split(features: pd.DataFrame, test_fraction: float = 0.2) -> Split:
         test_end=test["played_at"].max(),
         meta_test=test.reset_index(drop=True),
     )
+
+
+def _tournament_boundary(data: pd.DataFrame, cutoff: int) -> int:
+    """Move a row cutoff to the nearest tournament boundary.
+
+    A tournament is never split between train and test: its early rounds would
+    otherwise inform the evaluation of its late rounds through Elo and form.
+    Falls back to the row cutoff when no boundary leaves both sides non-empty.
+    """
+    if "tournament" not in data.columns or cutoff <= 0 or cutoff >= len(data):
+        return cutoff
+    names = data["tournament"].astype("string").fillna("").to_numpy()
+    boundaries = [i for i in range(1, len(names)) if names[i] != names[i - 1]]
+    if not boundaries:
+        return cutoff
+    best = min(boundaries, key=lambda i: (abs(i - cutoff), i))
+    return best if 0 < best < len(data) else cutoff
 
 
 def classification_metrics(y_true: pd.Series, proba: np.ndarray) -> dict[str, float]:
@@ -86,13 +103,30 @@ def classification_metrics(y_true: pd.Series, proba: np.ndarray) -> dict[str, fl
     }
 
 
+def provider_elo_probabilities(split: Split) -> tuple[np.ndarray, float]:
+    """The provider-Elo baseline on exactly the test matches, and its coverage.
+
+    Uses ``provider_elo_prob`` from the feature store: the probability implied
+    by the provider's Elo in the last snapshot published *before* each match
+    (see :func:`padel_predictor.common.features.attach_rankings`). A test match
+    without a snapshot for all four players gets 0.5 -- the provider knows
+    nothing about it -- so the baseline is scored on the same rows as the model
+    rather than on a friendlier subset.
+    """
+    if "provider_elo_prob" not in split.meta_test.columns:
+        return np.full(len(split.y_test), 0.5), 0.0
+    raw = pd.to_numeric(split.meta_test["provider_elo_prob"], errors="coerce").to_numpy(float)
+    coverage = float(np.isfinite(raw).mean()) if len(raw) else 0.0
+    return np.where(np.isfinite(raw), raw, 0.5), coverage
+
+
 def baseline_metrics(split: Split) -> dict[str, float]:
     """Metrics for the baselines any real model has to beat.
 
     * ``majority``: always predict the more common training outcome.
-    * ``elo``: predict the team with the higher Elo rating, using the Elo
-      expectation itself as the probability. This is the honest baseline for
-      match prediction -- a model that cannot beat it has learned nothing.
+    * ``elo``: the in-house Elo expectation from ``elo_diff``.
+    * ``provider_elo``: the data provider's own Elo as published before each
+      match -- the bar in the success criterion.
     """
     majority_rate = float(split.y_train.mean())
     majority = classification_metrics(split.y_test, np.full(len(split.y_test), majority_rate))
@@ -100,7 +134,51 @@ def baseline_metrics(split: Split) -> dict[str, float]:
     elo_prob = 1.0 / (1.0 + 10.0 ** (-split.x_test["elo_diff"].to_numpy() / 400.0))
     elo = classification_metrics(split.y_test, elo_prob)
 
+    provider_prob, coverage = provider_elo_probabilities(split)
+    provider = classification_metrics(split.y_test, provider_prob)
+
     return {
         **{f"baseline_majority_{k}": v for k, v in majority.items()},
         **{f"baseline_elo_{k}": v for k, v in elo.items()},
+        **{f"baseline_provider_elo_{k}": v for k, v in provider.items()},
+        "baseline_provider_elo_coverage": coverage,
+    }
+
+
+def per_match_log_loss(y_true: pd.Series, proba: np.ndarray) -> np.ndarray:
+    """Log loss of every single prediction, so differences can be resampled."""
+    y = np.asarray(y_true, dtype=int)
+    p = np.clip(np.asarray(proba, dtype=float), 1e-6, 1 - 1e-6)
+    return -(y * np.log(p) + (1 - y) * np.log(1 - p))
+
+
+def bootstrap_log_loss_difference(
+    y_true: pd.Series,
+    model_proba: np.ndarray,
+    baseline_proba: np.ndarray,
+    samples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> dict[str, float]:
+    """Paired bootstrap of ``log_loss(model) - log_loss(baseline)`` on the test set.
+
+    Matches are resampled with replacement and both predictors are scored on the
+    same resample, so the interval reflects how much the *difference* moves
+    with the choice of test matches. Negative means the model is better; the
+    model beats the baseline only if the whole interval is below zero.
+    """
+    diff = per_match_log_loss(y_true, model_proba) - per_match_log_loss(y_true, baseline_proba)
+    if len(diff) == 0:
+        nan = float("nan")
+        return {"mean": nan, "ci_low": nan, "ci_high": nan, "beats_baseline": 0.0}
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(diff), size=(samples, len(diff)))
+    means = diff[idx].mean(axis=1)
+    alpha = (1.0 - confidence) / 2.0
+    low, high = np.quantile(means, [alpha, 1.0 - alpha])
+    return {
+        "mean": float(diff.mean()),
+        "ci_low": float(low),
+        "ci_high": float(high),
+        "beats_baseline": float(high < 0.0),
     }

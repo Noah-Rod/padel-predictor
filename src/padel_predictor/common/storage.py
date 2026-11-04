@@ -8,6 +8,7 @@ swapping in Hopsworks or Feast later means reimplementing one file.
 Layout::
 
     <base>/raw_matches/ingest_date=YYYY-MM-DD/matches.parquet
+    <base>/raw_rankings/ingest_date=YYYY-MM-DD/rankings.parquet
     <base>/features/ingest_date=YYYY-MM-DD/features.parquet
     <base>/predictions/run_date=YYYY-MM-DD/predictions.parquet
 
@@ -27,16 +28,19 @@ from padel_predictor.common.logging import get_logger
 logger = get_logger(__name__)
 
 RAW_MATCHES = "raw_matches"
+RAW_RANKINGS = "raw_rankings"
 FEATURES = "features"
 PREDICTIONS = "predictions"
 
 _DATASET_FILENAMES = {
     RAW_MATCHES: "matches.parquet",
+    RAW_RANKINGS: "rankings.parquet",
     FEATURES: "features.parquet",
     PREDICTIONS: "predictions.parquet",
 }
 _PARTITION_KEYS = {
     RAW_MATCHES: "ingest_date",
+    RAW_RANKINGS: "ingest_date",
     FEATURES: "ingest_date",
     PREDICTIONS: "run_date",
 }
