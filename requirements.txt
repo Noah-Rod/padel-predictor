@@ -14,6 +14,8 @@ anyio==4.15.1
     #   starlette
     #   streamlit
     #   watchfiles
+arro3-core==0.9.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'
+    # via hops-deltalake
 attrs==26.1.0
     # via
     #   jsonschema
@@ -50,10 +52,18 @@ colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   tqdm
     #   typer
+confluent-kafka==2.11.1
+    # via hopsworks
 cryptography==50.0.1
     # via pymysql
+deprecated==1.3.1 ; (python_full_version < '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version < '3.12' and sys_platform == 'linux')
+    # via hops-deltalake
+deprecated==3.0.1 ; (python_full_version >= '3.12' and platform_machine == 'arm64' and sys_platform == 'darwin') or (python_full_version >= '3.12' and sys_platform == 'linux')
+    # via hops-deltalake
 fastapi==0.141.1
     # via padel-predictor
+fastavro==1.12.0
+    # via hopsworks
 fsspec==2025.10.0
     # via hopsworks
 furl==2.1.4
@@ -72,6 +82,8 @@ h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
+hops-deltalake==1.4.0.post1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'
+    # via hopsworks
 hopsworks==4.8.8
     # via padel-predictor
 hopsworks-aiomysql==0.2.3
@@ -156,6 +168,7 @@ protobuf==4.25.9
     #   wandb
 pyarrow==21.0.0
     # via
+    #   hopsworks
     #   padel-predictor
     #   streamlit
 pyasn1==0.6.4
@@ -274,6 +287,7 @@ typing-extensions==4.16.0
     # via
     #   altair
     #   anyio
+    #   arro3-core
     #   fastapi
     #   grpcio
     #   pydantic
@@ -317,3 +331,5 @@ websockets==16.1.1
     # via
     #   streamlit
     #   uvicorn
+wrapt==2.5.2 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or sys_platform == 'linux'
+    # via deprecated
