@@ -51,3 +51,67 @@ def test_remote_uris_are_detected_and_joined():
     assert storage.join_uri("gs://bucket", "features", "x.parquet") == (
         "gs://bucket/features/x.parquet"
     )
+
+
+def test_hopsworks_uris_select_the_hopsworks_backend():
+    assert storage.is_hopsworks("hopsworks://padel_predictor")
+    assert not storage.is_remote("hopsworks://padel_predictor")
+    assert storage.hopsworks_project_name("hopsworks://padel_predictor/") == "padel_predictor"
+
+
+def test_a_malformed_hopsworks_uri_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="hopsworks://<project>"):
+        storage.hopsworks_project_name("hopsworks://")
+
+
+def test_every_dataset_has_a_feature_group_with_its_key_and_event_time():
+    for dataset in (
+        storage.RAW_MATCHES,
+        storage.RAW_RANKINGS,
+        storage.FEATURES,
+        storage.PREDICTIONS,
+    ):
+        spec = storage.FEATURE_GROUPS[dataset]
+        assert spec.primary_key and spec.event_time
+
+
+def test_frames_are_coerced_for_hopsworks():
+    frame = pd.DataFrame(
+        {
+            "match_id": pd.array(["m1"], dtype="string"),
+            "team_a_won": pd.array([pd.NA], dtype="Int64"),
+            "team_a_rank_points": pd.array([1.5], dtype="Float64"),
+        }
+    )
+    out = storage.to_hopsworks_frame(frame, storage.PREDICTIONS, dt.date(2026, 11, 4))
+    assert out["team_a_won"].dtype == "float64"
+    assert out["match_id"].dtype == object
+    assert out["run_date"].tolist() == ["2026-11-04"]
+
+
+def test_hopsworks_writes_upsert_into_the_dataset_s_feature_group(monkeypatch):
+    """The backend is driven against a stand-in feature store: no network."""
+    calls = {}
+
+    class Group:
+        def insert(self, df, wait):
+            calls["rows"], calls["wait"] = len(df), wait
+
+    class Store:
+        def get_or_create_feature_group(self, **kwargs):
+            calls.update(kwargs)
+            return Group()
+
+    monkeypatch.setattr(storage, "_feature_store", lambda project: Store())
+    uri = storage.write_snapshot(
+        pd.DataFrame({"match_id": ["m1"], "played_at": [pd.Timestamp("2026-01-01", tz="UTC")]}),
+        "hopsworks://padel_predictor",
+        storage.RAW_MATCHES,
+        dt.date(2026, 1, 1),
+    )
+    assert uri == "hopsworks://padel_predictor/raw_matches_v1"
+    assert calls["primary_key"] == ["match_id"]
+    assert calls["event_time"] == "played_at"
+    assert calls["rows"] == 1 and calls["wait"] is True

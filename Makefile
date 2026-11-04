@@ -43,12 +43,12 @@ serve:  ## Run the prediction API
 ui:  ## Run the Streamlit UI
 	uv run streamlit run ui/app.py
 
-docker-up:  ## Start mlflow + api + ui
+docker-up:  ## Start api + ui
 	docker compose up --build
 
 docker-down:  ## Stop the stack
 	docker compose down
 
 clean:  ## Remove local data, models and caches
-	rm -rf data mlruns mlartifacts mlflow.db .pytest_cache .ruff_cache htmlcov .coverage coverage.xml
+	rm -rf data wandb .pytest_cache .ruff_cache htmlcov .coverage coverage.xml
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

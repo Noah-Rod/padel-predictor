@@ -20,9 +20,12 @@ jobs:
     timeout-minutes: 20
     env:
       PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
-      MLFLOW_TRACKING_URI: ${{ vars.MLFLOW_TRACKING_URI || 'sqlite:///mlflow.db' }}
-      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
-      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST }}
+      PADEL_TRACKING: ${{ vars.PADEL_TRACKING || 'local' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      WANDB_PROJECT: ${{ vars.WANDB_PROJECT || 'padel-predictor' }}
+      WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
       PADEL_MODEL_ALIAS: ${{ vars.PADEL_MODEL_ALIAS || 'champion' }}
       HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
 

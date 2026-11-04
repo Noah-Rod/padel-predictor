@@ -88,8 +88,18 @@ def ingest_rankings(
     """
     lookback = dt.timedelta(days=config.ingestion.rankings_lookback_days)
     rankings = normalise_raw_rankings(source.fetch_rankings(start - lookback, end))
+
+    # Only snapshots not seen before are written: the first time a snapshot was
+    # seen is when it was available, and an upsert must not move that time.
+    known = load_rankings(base_uri)
+    if not known.empty and not rankings.empty:
+        keys = ["player", "snapshot_date"]
+        seen = pd.MultiIndex.from_frame(known[keys])
+        rankings = rankings.loc[~pd.MultiIndex.from_frame(rankings[keys]).isin(seen)]
+        rankings = rankings.reset_index(drop=True)
+
     storage.write_snapshot(rankings, base_uri, storage.RAW_RANKINGS, snapshot_date)
-    logger.info("ingested %d ranking rows from source %r", len(rankings), source.name)
+    logger.info("ingested %d new ranking rows from source %r", len(rankings), source.name)
     return rankings
 
 

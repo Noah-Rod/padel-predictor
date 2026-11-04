@@ -1,7 +1,7 @@
 """Shared fixtures.
 
 Every test runs against a temporary feature store and a patched environment, so
-the suite never touches a developer's real ``data/`` directory or MLflow server.
+the suite never touches a developer's real ``data/`` directory, Hopsworks or W&B.
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ def _isolated_env(tmp_path, monkeypatch):
     """Point every configuration lookup at a throwaway directory."""
     monkeypatch.setenv("PADEL_SOURCE", "sample")
     monkeypatch.setenv("PADEL_FEATURE_STORE_URI", str(tmp_path / "feature_store"))
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'mlflow.db'}")
+    monkeypatch.setenv("PADEL_TRACKING", "local")
+    monkeypatch.setenv("PADEL_MODEL_REGISTRY_DIR", str(tmp_path / "model_registry"))
+    monkeypatch.setenv("WANDB_MODE", "disabled")
     monkeypatch.setenv("PADEL_API_BASE_URL", "")
     monkeypatch.setenv("PADEL_API_KEY", "")
     monkeypatch.delenv("PADEL_MODEL_ALIAS", raising=False)
