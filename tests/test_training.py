@@ -6,6 +6,9 @@ decides *whether* a model ships, which is the part that can silently go wrong.
 
 from __future__ import annotations
 
+import dataclasses
+import datetime as dt
+
 import numpy as np
 import pytest
 
@@ -13,7 +16,9 @@ from padel_predictor.common.features import build_feature_frame
 from padel_predictor.training import pipeline, registry
 from padel_predictor.training.dataset import (
     baseline_metrics,
+    bootstrap_log_loss_difference,
     classification_metrics,
+    provider_elo_probabilities,
     time_split,
 )
 
@@ -148,3 +153,72 @@ def test_training_refuses_to_run_on_too_little_data(settings, config, raw_matche
 def test_training_without_a_feature_store_fails_loudly(settings, config):
     with pytest.raises(RuntimeError, match="no feature snapshots"):
         pipeline.run(settings=settings, config=config, register=False)
+
+
+def test_split_never_cuts_through_a_tournament(features):
+    split = time_split(features, test_fraction=0.2)
+    train_tournaments = set(features.loc[features["played_at"] <= split.train_end, "tournament"])
+    assert not train_tournaments & set(split.meta_test["tournament"])
+
+
+def test_provider_baseline_is_scored_on_every_test_row(features):
+    split = time_split(features, 0.2)
+    meta = split.meta_test.assign(provider_elo_prob=0.7)
+    meta.loc[meta.index[:10], "provider_elo_prob"] = float("nan")
+    split = dataclasses.replace(split, meta_test=meta)
+
+    proba, coverage = provider_elo_probabilities(split)
+    assert len(proba) == len(split.y_test)
+    assert (proba[:10] == 0.5).all()
+    assert coverage == pytest.approx(1 - 10 / len(split.y_test))
+
+
+def test_baselines_include_the_provider_elo(features):
+    baselines = baseline_metrics(time_split(features, 0.2))
+    assert "baseline_provider_elo_log_loss" in baselines
+    assert 0.0 <= baselines["baseline_provider_elo_coverage"] <= 1.0
+
+
+def test_bootstrap_does_not_call_an_identical_model_a_win():
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 2000)
+    p = rng.uniform(0.2, 0.8, 2000)
+    result = bootstrap_log_loss_difference(y, p, p, samples=500)
+    assert result["mean"] == pytest.approx(0.0)
+    assert result["beats_baseline"] == 0.0
+
+
+def test_bootstrap_interval_contains_zero_for_a_tiny_noisy_edge():
+    """~2,000 matches and a 0.001 log-loss gap: not distinguishable from noise."""
+    rng = np.random.default_rng(1)
+    y = rng.integers(0, 2, 2000)
+    base = np.clip(np.where(y == 1, 0.6, 0.4) + rng.normal(0, 0.15, 2000), 0.05, 0.95)
+    model = np.clip(base + rng.normal(0, 0.02, 2000), 0.05, 0.95)
+    result = bootstrap_log_loss_difference(y, model, base, samples=1000)
+    assert result["ci_low"] < 0 < result["ci_high"]
+    assert result["beats_baseline"] == 0.0
+
+
+def test_bootstrap_recognises_a_clearly_better_model():
+    rng = np.random.default_rng(2)
+    y = rng.integers(0, 2, 2000)
+    good = np.where(y == 1, 0.75, 0.25)
+    result = bootstrap_log_loss_difference(y, good, np.full(2000, 0.5), samples=500)
+    assert result["ci_high"] < 0
+    assert result["beats_baseline"] == 1.0
+
+
+def test_training_reports_the_gap_to_the_provider_elo(settings, config):
+    from padel_predictor.features import pipeline as feature_pipeline
+
+    end = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    feature_pipeline.backfill(end - dt.timedelta(days=200), end, settings=settings, config=config)
+    result = pipeline.run(settings=settings, config=config, register=False)
+
+    for key in (
+        "vs_provider_elo_log_loss_diff",
+        "vs_provider_elo_ci_low",
+        "vs_provider_elo_ci_high",
+    ):
+        assert np.isfinite(result.baselines[key])
+    assert result.baselines["vs_provider_elo_ci_low"] <= result.baselines["vs_provider_elo_ci_high"]

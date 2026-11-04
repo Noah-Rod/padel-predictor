@@ -30,6 +30,7 @@ services:
       PADEL_SOURCE: ${PADEL_SOURCE:-sample}
       PADEL_API_BASE_URL: ${PADEL_API_BASE_URL:-}
       PADEL_API_KEY: ${PADEL_API_KEY:-}
+      PADEL_API_PLAN: ${PADEL_API_PLAN:-paid}
     ports:
       - "8000:8000"
     volumes:
@@ -67,6 +68,7 @@ services:
       PADEL_SOURCE: ${PADEL_SOURCE:-sample}
       PADEL_API_BASE_URL: ${PADEL_API_BASE_URL:-}
       PADEL_API_KEY: ${PADEL_API_KEY:-}
+      PADEL_API_PLAN: ${PADEL_API_PLAN:-paid}
     volumes:
       - data:/app/data
     depends_on:

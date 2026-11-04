@@ -7,6 +7,14 @@ ingestion:
   # Request timeout in seconds for the live source.
   timeout_seconds: 30
   max_retries: 3
+  # Ranking snapshots are re-read this many days before each window.
+  rankings_lookback_days: 14
+  # Backfilled ranking snapshots have no publication time; they count as
+  # published this many days after their label date, so a snapshot labelled
+  # with a tournament week is never joined onto that week's matches.
+  rankings_publication_lag_days: 7
+  # PADEL_API_PLAN=free only reaches this far back (and has no ranking history).
+  free_plan_history_days: 183
 
 features:
   # Elo rating state shared by training and inference (see common/features.py).
@@ -40,6 +48,12 @@ training:
     metric: log_loss
     higher_is_better: false
     min_improvement: 0.002
+  evaluation:
+    # Success criterion: the model beats the provider-Elo baseline only if the
+    # whole bootstrap confidence interval of the log-loss difference
+    # (model minus baseline, paired over the same test matches) is below zero.
+    bootstrap_samples: 2000
+    confidence: 0.95
 
 inference:
   # How far ahead the batch inference pipeline looks for unplayed matches.

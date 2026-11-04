@@ -68,3 +68,77 @@ def test_deduplicate_keeps_the_newest_ingest():
     out = deduplicate_matches(frame)
     assert len(out) == 1
     assert out.iloc[0]["winner"] == "A"
+
+
+def test_orient_teams_is_deterministic_and_ignores_source_order():
+    from padel_predictor.common.schemas import orient_teams
+
+    seeded_first = normalise_raw_matches(
+        pd.DataFrame([make_match("m1", "2026-01-05", ("X1", "X2"), ("Y1", "Y2"), "A")])
+    )
+    swapped = normalise_raw_matches(
+        pd.DataFrame([make_match("m1", "2026-01-05", ("Y2", "Y1"), ("X2", "X1"), "B")])
+    )
+    a, b = orient_teams(seeded_first).iloc[0], orient_teams(swapped).iloc[0]
+
+    pair = lambda row, side: frozenset((row[f"team_{side}_player_1"], row[f"team_{side}_player_2"]))  # noqa: E731
+    assert pair(a, "a") == pair(b, "a")
+    # The same pair won, so after orientation the label agrees as well.
+    assert a["winner"] == b["winner"]
+
+
+def test_orient_teams_balances_a_seed_ordered_feed():
+    """A feed that always lists the winner first must not yield 'A always wins'."""
+    from padel_predictor.common.schemas import orient_teams
+
+    rows = [
+        make_match(f"m{i}", "2026-01-05", (f"S{i}a", f"S{i}b"), (f"U{i}a", f"U{i}b"), "A")
+        for i in range(400)
+    ]
+    out = orient_teams(normalise_raw_matches(pd.DataFrame(rows)))
+    share_a = (out["winner"] == "A").mean()
+    assert 0.4 < share_a < 0.6
+
+
+def test_rankings_deduplicate_to_the_first_publication():
+    from padel_predictor.common.schemas import deduplicate_rankings
+
+    rows = pd.DataFrame(
+        [
+            {
+                "player": "P1",
+                "snapshot_date": "2026-01-05",
+                "published_at": "2026-01-05T08:00Z",
+                "rank_points": 10,
+                "provider_elo": 1500,
+            },
+            {
+                "player": "P1",
+                "snapshot_date": "2026-01-05",
+                "published_at": "2026-01-09T08:00Z",
+                "rank_points": 10,
+                "provider_elo": 1500,
+            },
+        ]
+    )
+    out = deduplicate_rankings(rows)
+    assert len(out) == 1
+    assert out.iloc[0]["published_at"] == pd.Timestamp("2026-01-05T08:00Z")
+
+
+def test_rankings_without_publication_time_are_rejected():
+    from padel_predictor.common.schemas import normalise_raw_rankings
+
+    rows = pd.DataFrame(
+        [
+            {
+                "player": "P1",
+                "snapshot_date": "2026-01-05",
+                "published_at": None,
+                "rank_points": 10,
+                "provider_elo": 1500,
+            }
+        ]
+    )
+    with pytest.raises(SchemaError, match="published_at"):
+        normalise_raw_rankings(rows)

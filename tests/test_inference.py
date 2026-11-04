@@ -31,7 +31,7 @@ class StubModel:
 @pytest.fixture
 def predictor(config) -> Predictor:
     handle = ModelHandle(
-        model=StubModel(), name="padel-match-winner", version="7", alias="champion"
+        model=StubModel(), name="padel-match-winner", version="7", alias="champion", run_id="r7"
     )
     return Predictor(handle, config)
 
@@ -50,6 +50,9 @@ def test_predict_frame_adds_probability_and_provenance(predictor, history, confi
     assert out["probability_team_a"].between(0, 1).all()
     assert set(out["predicted_winner"]) <= {"A", "B"}
     assert (out["model_version"] == "7").all()
+    # Every row records which model served it (editorial point E4).
+    for column in ("model_name", "model_version", "model_run_id", "predicted_at"):
+        assert column in out.columns
 
 
 def test_predicted_winner_follows_the_probability(predictor, history, config):
