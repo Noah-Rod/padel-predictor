@@ -28,11 +28,29 @@ and promotes models, and an inference pipeline that serves predictions.
 
 ### What the model sees
 
-Six team-difference features, all replayed in chronological order so a row only
-ever sees matches that finished earlier:
+Six team-difference features (team A minus team B), all replayed in
+chronological order so a row only ever sees matches that finished earlier.
+Padel is played in pairs, so each player-level value is first aggregated to the
+pair:
 
-`elo_diff` · `rank_points_diff` · `form_diff` · `rest_days_diff` ·
-`partnership_diff` · `tier_level`
+| Feature | Team value |
+| --- | --- |
+| `elo_diff` | mean of the two players' in-house Elo (start 1500, K = 24) |
+| `rank_points_diff` | sum of the two players' official points, from the last ranking snapshot **published before** the match |
+| `form_diff` | mean of the two players' win rates over each player's last 5 matches, with any partner (0.5 without history) |
+| `rest_days_diff` | days since the pair's most recently active player last played, capped at 60 (14 if never seen) |
+| `partnership_diff` | matches this exact pair has played together before |
+| `tier_level` | ordinal tier of the event: major 4, p1 3, p2 2, challenger 1 |
+
+A new partnership starts at `partnership = 0`, but Elo, form and rest stay per
+player, so two strong players who just paired up keep their strength.
+Teams are assigned to side A or B by a hash of the two pair names, never by
+the source's (seeded) order, so the label is balanced.
+
+The provider's own Elo is **not** a feature: it is the baseline. Its win
+probability (`provider_elo_prob`, mean of the two players' provider Elo) is
+stored next to each feature row and scored on exactly the same test matches as
+the model.
 
 Two design decisions carry most of the weight:
 
@@ -42,6 +60,13 @@ Two design decisions carry most of the weight:
 - **No leakage by construction.** A match's own result is folded into the rolling
   state only *after* its feature row is built. A unit test asserts it: flipping a
   match's winner must not change that match's features.
+- **Rankings join on publication time.** Ranking snapshots are weekly and a
+  tournament runs Wednesday to Sunday, so a snapshot labelled with a tournament
+  week can already contain that week's results. Each player gets the latest
+  snapshot whose `published_at` is strictly before the scheduled start; backfilled
+  snapshots without a publication time count as published seven days after
+  their label date. Unit tests cover the published-after-the-week and
+  published-exactly-at-the-start cases.
 
 ---
 
@@ -60,6 +85,7 @@ uv sync --all-extras
 # 1. Feature pipeline: load history, then keep it current
 uv run padel backfill --start 2025-09-01 --end 2026-09-01
 uv run padel feature-pipeline
+uv run padel data-report      # counts per season/tier + baselines on the test split
 
 # 2. Training pipeline: train, evaluate, promote to @champion
 uv run padel training-pipeline
@@ -121,6 +147,15 @@ state, set these repository variables:
 | `MLFLOW_TRACKING_URI` | `https://your-mlflow-host` |
 | `PADEL_SOURCE` | `http` |
 | `PADEL_API_BASE_URL` | the live source's base URL |
+| `PADEL_API_PLAN` | `paid` (full archive + ranking history) or `free` |
+
+**Without a subscription.** `PADEL_API_PLAN=free` runs the same pipeline on the
+provider's free tier: the backfill is clamped to the last six months and, as
+there is no ranking history, only the current ranking is stored, published at
+fetch time. Ranking points and the provider baseline are therefore missing for
+history and filled in from then on: the numbers get worse, the pipeline does
+not break. With no key at all, the default `sample` source runs everything
+offline.
 
 The feature and training workflows emit a warning when these are still local.
 
