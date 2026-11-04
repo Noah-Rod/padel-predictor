@@ -50,7 +50,7 @@ pair:
 | `form_diff` | mean of the two players' win rates over each player's last 5 matches, with any partner (0.5 without history) |
 | `rest_days_diff` | days since the pair's most recently active player last played, capped at 60 (14 if never seen) |
 | `partnership_diff` | matches this exact pair has played together before |
-| `tier_level` | ordinal tier of the event: major 4, p1 3, p2 2, challenger 1 |
+| `tier_level` | ordinal tier of the event: major and finals 4, p1 3, p2 2, FIP Platinum and Gold 1 |
 
 A new partnership starts at `partnership = 0`, but Elo, form and rest stay per
 player, so two strong players who just paired up keep their strength.
@@ -159,8 +159,20 @@ and these repository variables:
 | `PADEL_TRACKING` | `wandb` |
 | `WANDB_PROJECT` / `WANDB_ENTITY` | `padel-predictor` / your W&B user or team |
 | `PADEL_SOURCE` | `http` |
-| `PADEL_API_BASE_URL` | the live source's base URL |
-| `PADEL_API_PLAN` | `paid` (full archive + ranking history) or `free` |
+| `PADEL_API_BASE_URL` | `https://padelapi.org/api` |
+| `PADEL_API_PLAN` | `paid` (Plus or higher: full archive + ranking history) or `free` |
+
+**What the live source reads.** padelapi.org, tournament by tournament as the
+provider recommends: `/tournaments` lists the editions running in the window at
+the levels in `ingestion.levels` (Premier Padel and FIP Platinum and Gold), then
+`/tournaments/{id}/matches` pages through each main draw. `finished` and
+`retired` matches are labelled; walkovers, byes and `not_played` are dropped;
+a match counts as a fixture once both pairs are drawn. `/rankings` gives one
+weekly snapshot per Monday of the official points and the provider's Elo (top
+200 per category). Requests are paced under the plan's per-minute limit, a
+`429` waits for `Retry-After`, and a used-up daily quota stops the run with a
+clear error, so a backfill is resumed by running it again. A year of history
+costs roughly 1,000 requests, about 20 minutes on the paid plan.
 
 **Without a subscription.** `PADEL_API_PLAN=free` runs the same pipeline on the
 provider's free tier: the backfill is clamped to the last six months and, as

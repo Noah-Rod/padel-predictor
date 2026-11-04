@@ -10,16 +10,18 @@ Two adapters ship with the project:
     Deterministic synthetic matches. No network, no credentials -- this is what
     CI and a fresh clone run on, and what makes the pipeline reproducible.
 ``http``
-    Reads a live JSON endpoint configured through ``PADEL_API_BASE_URL``.
-    :meth:`HttpMatchSource.parse_records` holds the mapping from the endpoint's
-    payload to the raw-match schema and is the one place to adapt when pointing
-    the pipeline at a different provider.
+    Reads padelapi.org (``PADEL_API_BASE_URL=https://padelapi.org/api``) with a
+    bearer token. :meth:`HttpMatchSource.parse_records` and
+    :meth:`HttpMatchSource.parse_ranking_records` hold the whole mapping from
+    the provider's payload to the raw schemas.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import math
+import time
+from collections.abc import Callable
 from typing import Any, Protocol
 
 import httpx
@@ -191,18 +193,174 @@ class SampleMatchSource:
 # --------------------------------------------------------------------------- #
 # Live HTTP source
 # --------------------------------------------------------------------------- #
-class HttpMatchSource:
-    """Reads matches from a live JSON endpoint.
+#: padelapi.org's ``round`` is the number of matches in the round; these are the
+#: labels the rest of the system uses.
+PADELAPI_ROUND_LABELS: dict[int, str] = {
+    1: "F",
+    2: "SF",
+    4: "QF",
+    8: "R16",
+    16: "R32",
+    32: "R64",
+    0: "G",
+}
+#: Statuses whose ``winner`` is a played result. ``retired`` started and has a
+#: winner; the provider's own Elo counts it too.
+LABELLED_STATUSES = frozenset({"finished", "retired"})
+#: Statuses that are not a played match: no row, labelled or upcoming.
+DROPPED_STATUSES = frozenset({"walkover", "bye", "not_played"})
+#: What the free plan returns instead of values it does not include.
+HIDDEN = "hidden_free_plan"
+#: Timestamps without an offset are in the provider's server time zone.
+SERVER_TIMEZONE = "Europe/Madrid"
+RANKING_TYPES = {"official": "rank_points", "elo": "provider_elo"}
+CATEGORIES = ("men", "women")
 
-    The endpoint is expected to accept ``from``/``to`` date query parameters and
-    return ``{"matches": [ ... ]}`` (or a bare list). Adapt
-    :meth:`parse_records` to the provider actually being used -- it is the only
-    part of the codebase that knows the provider's payload shape.
+
+class RateLimitExhausted(RuntimeError):
+    """The daily (or monthly) request quota is used up; resume the run later."""
+
+
+class _PadelApiClient:
+    """GET with pagination, pacing to the plan's per-minute limit and 429 handling."""
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        config: IngestionConfig,
+        requests_per_minute: int,
+        transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        headers = {"Accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._http = httpx.Client(
+            base_url=base_url,
+            headers=headers,
+            timeout=config.timeout_seconds,
+            # Merged players, tournaments and matches answer with a 302 to the
+            # canonical record.
+            follow_redirects=True,
+            transport=transport or httpx.HTTPTransport(retries=config.max_retries),
+        )
+        self.config = config
+        self.min_interval = 60.0 / max(requests_per_minute, 1)
+        self._sleep = sleep
+        self._clock = clock
+        self._last_request: float | None = None
+        self.requests = 0
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> _PadelApiClient:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def _pace(self) -> None:
+        if self._last_request is not None:
+            wait = self.min_interval - (self._clock() - self._last_request)
+            if wait > 0:
+                self._sleep(wait)
+        self._last_request = self._clock()
+
+    def get(self, path: str, params: dict[str, Any]) -> Any:
+        for attempt in range(self.config.max_retries + 1):
+            self._pace()
+            self.requests += 1
+            response = self._http.get(path, params=params)
+            if response.status_code == 429:
+                retry_after = float(response.headers.get("Retry-After", 60))
+                if retry_after > self.config.max_retry_after_seconds:
+                    raise RateLimitExhausted(
+                        f"padelapi.org quota exhausted (Retry-After {retry_after:.0f}s); "
+                        "re-run later, a backfill resumes from its last chunk"
+                    )
+                logger.warning("rate limited on %s, waiting %.0fs", path, retry_after)
+                self._sleep(retry_after)
+                continue
+            if response.status_code >= 500 and attempt < self.config.max_retries:
+                self._sleep(2.0**attempt)
+                continue
+            if response.status_code == 402:
+                raise PermissionError(
+                    f"{path} is not included in the current padelapi.org plan; check PADEL_API_PLAN"
+                )
+            response.raise_for_status()
+            return response.json()
+        raise RuntimeError(f"giving up on {path} after {self.config.max_retries + 1} attempts")
+
+    def paginate(
+        self, path: str, params: dict[str, Any], max_pages: int | None = None
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = self.get(path, {**params, "page": page, "per_page": self.config.page_size})
+            data = payload.get("data", []) if isinstance(payload, dict) else payload
+            records.extend(data)
+            meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+            last_page = int(meta.get("last_page") or page)
+            if not data or page >= last_page or (max_pages is not None and page >= max_pages):
+                return records
+            page += 1
+
+
+def _start_time(record: dict[str, Any]) -> pd.Timestamp | None:
+    """The match start in UTC: ``scheduled_at``, else the day it is played."""
+    scheduled = record.get("scheduled_at")
+    if scheduled and scheduled != HIDDEN:
+        ts = pd.Timestamp(scheduled)
+        ts = ts.tz_localize(SERVER_TIMEZONE) if ts.tzinfo is None else ts
+        return ts.tz_convert("UTC")
+    day = record.get("played_at")
+    if day and day != HIDDEN:
+        # Midnight is the earliest the match can start, so the as-of ranking
+        # join can only ever be stricter than with the real start time.
+        return pd.Timestamp(day).tz_localize("UTC")
+    return None
+
+
+def _pair(players: Any) -> tuple[str, str] | None:
+    """The two player names of a team, or ``None`` while the pair is not known."""
+    if not isinstance(players, list) or len(players) != 2:
+        return None
+    names = [p.get("name") for p in players if isinstance(p, dict)]
+    if len(names) != 2 or not all(names):
+        return None
+    return names[0], names[1]
+
+
+def _mondays(start: dt.date, end: dt.date) -> list[dt.date]:
+    first = start - dt.timedelta(days=start.weekday())
+    return [first + dt.timedelta(weeks=i) for i in range((end - first).days // 7 + 1)]
+
+
+class HttpMatchSource:
+    """Reads matches and rankings from padelapi.org (``PADEL_API_BASE_URL``).
+
+    Matches are read tournament by tournament, as the provider recommends:
+    ``/tournaments`` lists the editions running in the window at the levels in
+    ``ingestion.levels``, then ``/tournaments/{id}/matches`` pages through each
+    one's main draw. Ranking snapshots come from ``/rankings`` per ISO week
+    (paid plan) or as the latest snapshot only (free plan).
     """
 
     name = "http"
 
-    def __init__(self, settings: Settings, config: IngestionConfig) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        config: IngestionConfig,
+        transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.plan = settings.api_plan.strip().lower()
         if self.plan not in {"paid", "free"}:
             raise ValueError(f"PADEL_API_PLAN must be 'paid' or 'free', got {settings.api_plan!r}")
@@ -214,58 +372,103 @@ class HttpMatchSource:
         self.base_url = settings.api_base_url.rstrip("/")
         self.api_key = settings.api_key.get_secret_value()
         self.config = config
+        self._transport = transport
+        self._sleep = sleep
+        self._clock = clock
 
-    def _headers(self) -> dict[str, str]:
-        headers = {"Accept": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-        return headers
+    def _client(self) -> _PadelApiClient:
+        return _PadelApiClient(
+            self.base_url,
+            self.api_key,
+            self.config,
+            requests_per_minute=self.config.requests_per_minute.get(self.plan, 10),
+            transport=self._transport,
+            sleep=self._sleep,
+            clock=self._clock,
+        )
 
     def fetch(self, start: dt.date, end: dt.date) -> pd.DataFrame:
         if start > end:
             raise ValueError(f"start {start} is after end {end}")
 
-        url = f"{self.base_url}/matches"
-        params = {"from": start.isoformat(), "to": end.isoformat()}
-        transport = httpx.HTTPTransport(retries=self.config.max_retries)
+        records: list[dict[str, Any]] = []
+        with self._client() as client:
+            tournaments = client.paginate(
+                "/tournaments",
+                {
+                    "after_date": start.isoformat(),
+                    "before_date": end.isoformat(),
+                    "level": ",".join(self.config.levels),
+                    "format": "pairs",
+                    "sort_by": "start_date",
+                    "order_by": "asc",
+                },
+            )
+            for tournament in tournaments:
+                if tournament.get("status") == "cancelled":
+                    continue
+                matches = client.paginate(
+                    f"/tournaments/{tournament['id']}/matches",
+                    {"sort_by": "played_at", "order_by": "asc"},
+                )
+                records.extend({**match, "tournament": tournament} for match in matches)
+            logger.info(
+                "fetched %d matches from %d tournaments for %s..%s (%d requests)",
+                len(records),
+                len(tournaments),
+                start,
+                end,
+                client.requests,
+            )
 
-        with httpx.Client(timeout=self.config.timeout_seconds, transport=transport) as client:
-            response = client.get(url, params=params, headers=self._headers())
-            response.raise_for_status()
-            payload = response.json()
-
-        records = payload.get("matches", []) if isinstance(payload, dict) else payload
-        logger.info("fetched %d records from %s for %s..%s", len(records), url, start, end)
-        return self.parse_records(records)
-
-    def _get(self, path: str, params: dict[str, str]) -> Any:
-        transport = httpx.HTTPTransport(retries=self.config.max_retries)
-        with httpx.Client(timeout=self.config.timeout_seconds, transport=transport) as client:
-            response = client.get(f"{self.base_url}{path}", params=params, headers=self._headers())
-            response.raise_for_status()
-            return response.json()
+        frame = self.parse_records(records)
+        days = frame["played_at"].dt.date
+        return frame.loc[(days >= start) & (days <= end)].reset_index(drop=True)
 
     def fetch_rankings(self, start: dt.date, end: dt.date) -> pd.DataFrame:
         """Ranking snapshots for a window.
 
-        The paid plan reads the weekly ranking history. The free plan only has
-        the current ranking, which is stored as a snapshot published *now*: it
-        therefore only ever joins onto matches that start after this run, never
-        onto history.
+        The paid plan reads one weekly snapshot per Monday in the window. The
+        free plan only shows the latest snapshot, which is stored as published
+        *now*: it therefore only ever joins onto matches that start after this
+        run, never onto history.
         """
         if start > end:
             raise ValueError(f"start {start} is after end {end}")
         now = pd.Timestamp.now(tz="UTC")
-        if self.plan == "free":
-            payload = self._get("/rankings", {})
-            records = payload.get("rankings", []) if isinstance(payload, dict) else payload
-            return self.parse_ranking_records(
-                records, fetched_at=now, default_snapshot_date=now.normalize()
+        today = now.date()
+        # The free plan hides every snapshot but the latest one.
+        dates: list[dt.date | None] = (
+            [None] if self.plan == "free" else list(_mondays(start, min(end, today)))
+        )
+
+        records: list[dict[str, Any]] = []
+        with self._client() as client:
+            for date in dates:
+                for ranking_type in RANKING_TYPES:
+                    for category in CATEGORIES:
+                        params: dict[str, Any] = {
+                            "type": ranking_type,
+                            "category": category,
+                            "sort_by": "ranking",
+                            "order_by": "asc",
+                        }
+                        if date is not None:
+                            params["date"] = date.isoformat()
+                        records.extend(
+                            client.paginate(
+                                "/rankings", params, max_pages=self.config.rankings_max_pages
+                            )
+                        )
+            logger.info(
+                "fetched %d ranking entries for %d snapshot(s) (%d requests)",
+                len(records),
+                len(dates),
+                client.requests,
             )
 
-        payload = self._get("/rankings/history", {"from": start.isoformat(), "to": end.isoformat()})
-        records = payload.get("rankings", []) if isinstance(payload, dict) else payload
-        logger.info("fetched %d ranking records for %s..%s", len(records), start, end)
+        if self.plan == "free":
+            records = [{**r, "published_at": now.isoformat()} for r in records]
         return self.parse_ranking_records(
             records,
             fetched_at=now,
@@ -277,12 +480,14 @@ class HttpMatchSource:
         records: list[dict[str, Any]],
         fetched_at: pd.Timestamp,
         publication_lag: pd.Timedelta | None = None,
-        default_snapshot_date: pd.Timestamp | None = None,
     ) -> pd.DataFrame:
-        """Map the provider's ranking payload onto the ranking schema.
+        """Map ``/rankings`` entries onto the ranking schema, one row per player and week.
+
+        An ``official`` entry carries the FIP points, an ``elo`` entry carries
+        the provider's Elo in ``points``; both are merged on (player, date).
 
         ``published_at`` is the join key, so it is never guessed optimistically:
-        the provider's own publication time when it sends one, otherwise the
+        the provider's own publication time when there is one, otherwise the
         label date plus ``publication_lag``, and never later than ``fetched_at``
         would make it -- a snapshot cannot have been available after we saw it,
         but it may have been available later than its label suggests.
@@ -290,73 +495,104 @@ class HttpMatchSource:
         if not records:
             return empty_raw_rankings()
         publication_lag = pd.Timedelta(days=7) if publication_lag is None else publication_lag
-        rows: list[dict[str, Any]] = []
+        rows: dict[tuple[str, pd.Timestamp], dict[str, Any]] = {}
         for record in records:
             try:
-                player = record["player"]
-                name = player["name"] if isinstance(player, dict) else player
-                label = record.get("date") or record.get("snapshot_date") or default_snapshot_date
-                if label is None:
-                    raise KeyError("date")
-                label_ts = pd.Timestamp(label)
+                column = RANKING_TYPES.get(record.get("type", "official"))
+                if column is None:
+                    continue
+                name = record["name"]
+                label_ts = pd.Timestamp(record["date"])
                 label_ts = label_ts.tz_localize("UTC") if label_ts.tzinfo is None else label_ts
                 published = record.get("published_at")
                 if published:
                     published_ts = pd.Timestamp(published)
                 else:
                     published_ts = min(label_ts + publication_lag, fetched_at)
-                rows.append(
+                points = record.get("points")
+                row = rows.setdefault(
+                    (name, label_ts),
                     {
                         "player": name,
                         "snapshot_date": label_ts,
                         "published_at": published_ts,
-                        "rank_points": record.get("points"),
-                        "provider_elo": record.get("elo"),
-                    }
+                        "rank_points": None,
+                        "provider_elo": None,
+                    },
                 )
+                row[column] = None if points == HIDDEN else points
             except (KeyError, TypeError, ValueError) as exc:
                 logger.warning("skipping malformed ranking record: %s", exc)
         if not rows:
             return empty_raw_rankings()
-        return normalise_raw_rankings(pd.DataFrame(rows, columns=list(RAW_RANKING_COLUMNS)))
+        frame = pd.DataFrame(list(rows.values()), columns=list(RAW_RANKING_COLUMNS))
+        return normalise_raw_rankings(frame)
 
     @staticmethod
     def parse_records(records: list[dict[str, Any]]) -> pd.DataFrame:
-        """Map the provider's payload onto the raw-match schema.
+        """Map padelapi.org matches (each with its ``tournament`` embedded) onto the schema.
 
-        Adapt the key names below to the live provider. Records missing a key
-        are dropped rather than silently filled, so a schema change upstream
-        shows up as a row-count drop instead of a column of nulls.
+        Kept: ``finished`` and ``retired`` with their winner, and every other
+        status whose two pairs are known as an unlabelled fixture. Dropped: a
+        walkover, bye or ``not_played``, a match whose pairs are not drawn yet,
+        and a finished match whose winner the free plan hides -- it is neither
+        a label nor a fixture. Records missing a key are dropped rather than
+        silently filled, so a schema change upstream shows up as a row-count
+        drop instead of a column of nulls.
         """
         if not records:
             return empty_raw_matches()
 
         rows: list[dict[str, Any]] = []
+        skipped = {"not played": 0, "pairs unknown": 0, "winner hidden": 0, "no date": 0}
         for record in records:
             try:
+                status = record["status"]
+                if status in DROPPED_STATUSES:
+                    skipped["not played"] += 1
+                    continue
+                team_1 = _pair(record["players"]["team_1"])
+                team_2 = _pair(record["players"]["team_2"])
+                if team_1 is None or team_2 is None:
+                    skipped["pairs unknown"] += 1
+                    continue
+                winner = None
+                if status in LABELLED_STATUSES:
+                    if record.get("winner") not in ("team_1", "team_2"):
+                        skipped["winner hidden"] += 1
+                        continue
+                    winner = "A" if record["winner"] == "team_1" else "B"
+                played_at = _start_time(record)
+                if played_at is None:
+                    skipped["no date"] += 1
+                    continue
+                tournament = record.get("tournament") or {}
+                round_code = record.get("round")
                 rows.append(
                     {
                         "match_id": str(record["id"]),
-                        "played_at": record["scheduled_at"],
-                        "tournament": record.get("tournament", {}).get("name", "unknown"),
-                        "tier": record.get("tournament", {}).get("tier", "unknown"),
-                        "round": record.get("round", "unknown"),
-                        "team_a_player_1": record["teams"][0]["players"][0]["name"],
-                        "team_a_player_2": record["teams"][0]["players"][1]["name"],
-                        "team_b_player_1": record["teams"][1]["players"][0]["name"],
-                        "team_b_player_2": record["teams"][1]["players"][1]["name"],
-                        "team_a_rank_points": record["teams"][0].get("rank_points"),
-                        "team_b_rank_points": record["teams"][1].get("rank_points"),
-                        "winner": record.get("winner"),
+                        "played_at": played_at,
+                        "tournament": tournament.get("name", "unknown"),
+                        "tier": tournament.get("level", "unknown"),
+                        "round": PADELAPI_ROUND_LABELS.get(round_code, str(round_code)),
+                        "team_a_player_1": team_1[0],
+                        "team_a_player_2": team_1[1],
+                        "team_b_player_1": team_2[0],
+                        "team_b_player_2": team_2[1],
+                        "team_a_rank_points": None,
+                        "team_b_rank_points": None,
+                        "winner": winner,
                     }
                 )
-            except (KeyError, IndexError, TypeError) as exc:
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
                 logger.warning("skipping malformed record %s: %s", record.get("id", "?"), exc)
+        if any(skipped.values()):
+            logger.info("skipped matches: %s", skipped)
 
         if not rows:
             return empty_raw_matches()
         frame = normalise_raw_matches(pd.DataFrame(rows, columns=list(RAW_MATCH_COLUMNS)))
-        # The provider lists the higher seed first; sides are re-assigned by hash.
+        # team_1 is the higher seed; sides are re-assigned by a hash of the pair names.
         return orient_teams(frame)
 
 

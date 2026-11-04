@@ -108,6 +108,18 @@ class IngestionConfig(BaseModel):
     rankings_publication_lag_days: int = 7
     # How far back the free plan reaches.
     free_plan_history_days: int = 183
+    # padelapi.org tournament levels read by the http source.
+    levels: list[str] = Field(
+        default_factory=lambda: ["major", "p1", "p2", "finals", "fip_platinum", "fip_gold"]
+    )
+    # Results per page (the provider's maximum is 50).
+    page_size: int = 50
+    # Requests are paced to stay under the plan's per-minute limit.
+    requests_per_minute: dict[str, int] = Field(default_factory=lambda: {"free": 9, "paid": 55})
+    # Pages of 50 read per ranking list, category and week (4 = top 200).
+    rankings_max_pages: int = 4
+    # A longer Retry-After than this means the daily quota is gone: stop.
+    max_retry_after_seconds: float = 120.0
 
 
 class FeatureConfig(BaseModel):

@@ -15,6 +15,17 @@ ingestion:
   rankings_publication_lag_days: 7
   # PADEL_API_PLAN=free only reaches this far back (and has no ranking history).
   free_plan_history_days: 183
+  # padelapi.org levels in scope (proposal: Premier Padel plus FIP Platinum and Gold).
+  levels: [major, p1, p2, finals, fip_platinum, fip_gold]
+  page_size: 50
+  # Pacing per PADEL_API_PLAN, just under the provider's limits (10 and 60 per minute).
+  requests_per_minute:
+    free: 9
+    paid: 55
+  # Pages of 50 per ranking list (official points, Elo), category and week: top 200.
+  rankings_max_pages: 4
+  # A 429 asking to wait longer than this means the daily quota is used up.
+  max_retry_after_seconds: 120
 
 features:
   # Elo rating state shared by training and inference (see common/features.py).
@@ -25,8 +36,11 @@ features:
   # Ordinal encoding of the tour tier; unknown tiers fall back to 0.
   tier_levels:
     major: 4
+    finals: 4
     p1: 3
     p2: 2
+    fip_platinum: 1
+    fip_gold: 1
     challenger: 1
 
 training:
