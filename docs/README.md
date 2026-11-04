@@ -21,6 +21,7 @@ the PDF before 23:59 — not the morning after.
 | `proposal.md` | Working draft of the proposal. Edit it, then export to `proposal.pdf`. |
 | `build_pdf.py` | Markdown to PDF export used for every milestone document. |
 | `milestone_summary_template.md` | Structure for each `ms<n>_summary.pdf`, including the response-to-reviewers format. |
+| `reviews/` | Peer reviews and editorial summaries received for this project (`MS<n>_ReviewerA.pdf`, `MS<n>_ReviewerB.pdf`, `MS<n>_EditorialSummary.pdf`), answered in the next `ms<n>_summary.pdf`. |
 
 ## Exporting a draft to PDF
 
@@ -41,6 +42,6 @@ Check the result is **at most 2 pages** and that the diagram is legible.
 
 ## Peer reviews
 
-Reviews are uploaded to ILIAS, not committed here. They are anonymous: the file
+Reviews written for other projects are uploaded to ILIAS, not committed here. They are anonymous: the file
 must carry no name anywhere, **including the PDF metadata** (check File →
 Properties before uploading). Naming: `MS<n>_P<projectID>_Reviewer<A|B>.pdf`.

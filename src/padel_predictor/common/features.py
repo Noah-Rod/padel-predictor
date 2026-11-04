@@ -9,6 +9,36 @@ keeps training and serving from drifting apart.
 recent form, rest, partnership history) replayed in chronological order. For
 every match the feature row is computed *before* that match's result is folded
 into the state, so a row only ever sees matches that finished earlier.
+
+**Rankings are joined on publication time.** Official points and the provider's
+Elo come from weekly snapshots. A snapshot is matched to a match only if its
+``published_at`` is strictly before the match's scheduled start
+(:func:`attach_rankings`), never by the date the snapshot is labelled with: a
+snapshot labelled with a tournament week can be published after that week and
+already contain its results.
+
+**From two players to one team.** Padel is played in pairs, so every
+player-level value is aggregated to the pair before the A-minus-B difference:
+
+=====================  =========================================================
+feature                team value
+=====================  =========================================================
+``elo_diff``           mean of the two players' in-house Elo (start 1500, K=24)
+``rank_points_diff``   sum of the two players' official points, from the last
+                       snapshot published before the match (unranked = 0)
+``form_diff``          mean of the two players' win rates over each player's last
+                       ``form_window`` (5) matches, with any partner; 0.5 when a
+                       player has no history
+``rest_days_diff``     days since the pair's most recently active player last
+                       played (the smaller gap), capped at 60; 14 for a player
+                       never seen
+``partnership_diff``   matches this exact pair has played together before
+``tier_level``         ordinal tier of the event (not a difference)
+=====================  =========================================================
+
+A new partnership has ``partnership = 0``, but it is not treated as a new team:
+Elo, form and rest stay per player, so two experienced players who just paired
+up keep their individual strength and only the partnership feature is reset.
 """
 
 from __future__ import annotations
@@ -33,6 +63,11 @@ FEATURE_COLUMNS: tuple[str, ...] = (
 
 #: The label: 1 when team A won, 0 when team B won, <NA> when not yet played.
 TARGET_COLUMN = "team_a_won"
+
+#: Not model inputs: the provider-Elo baseline and the ranking snapshot used.
+#: ``provider_elo_prob`` is the win probability for A implied by the provider's
+#: Elo as published before the match -- the bar the model has to beat.
+BASELINE_COLUMNS: tuple[str, ...] = ("provider_elo_prob", "ranking_published_at")
 
 #: Identifying columns carried alongside the features for joins and debugging.
 KEY_COLUMNS: tuple[str, ...] = (
@@ -169,9 +204,73 @@ class MatchState:
         self.pair_matches[self.pair_key(team_b)] += 1
 
 
+_SIDES: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("team_a", ("team_a_player_1", "team_a_player_2")),
+    ("team_b", ("team_b_player_1", "team_b_player_2")),
+)
+
+
+def attach_rankings(matches: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFrame:
+    """As-of join of ranking snapshots onto matches, strictly before the start.
+
+    For each of the four players the latest snapshot with
+    ``published_at < played_at`` is used (``allow_exact_matches=False``). A
+    snapshot published at or after the scheduled start -- for instance one
+    labelled with the current tournament week but published once that week is
+    over -- is never visible to the match.
+
+    Overwrites ``team_{a,b}_rank_points`` (sum of the two players; NaN when
+    neither player is ranked yet) and adds :data:`BASELINE_COLUMNS`.
+    """
+    from padel_predictor.common.schemas import normalise_raw_rankings
+
+    out = matches.copy()
+    ranks = normalise_raw_rankings(rankings)
+    ranks = ranks.sort_values("published_at", kind="stable")
+    played_at = out["played_at"].astype("datetime64[ns, UTC]")
+
+    per_side: dict[str, dict[str, pd.Series]] = {}
+    published: list[pd.Series] = []
+    for side, columns in _SIDES:
+        points, elos = [], []
+        for column in columns:
+            left = pd.DataFrame(
+                {"_row": range(len(out)), "played_at": played_at.to_numpy(), "player": out[column]}
+            )
+            left["player"] = left["player"].astype("string")
+            left = left.sort_values("played_at", kind="stable")
+            joined = pd.merge_asof(
+                left,
+                ranks[["player", "published_at", "rank_points", "provider_elo"]],
+                left_on="played_at",
+                right_on="published_at",
+                by="player",
+                allow_exact_matches=False,
+                direction="backward",
+            ).sort_values("_row")
+            points.append(joined["rank_points"].reset_index(drop=True))
+            elos.append(joined["provider_elo"].reset_index(drop=True))
+            published.append(joined["published_at"].reset_index(drop=True))
+        per_side[side] = {
+            "points": pd.concat(points, axis=1).sum(axis=1, min_count=1),
+            # The provider's pair rating needs both players; otherwise no baseline.
+            "elo": pd.concat(elos, axis=1).mean(axis=1, skipna=False),
+        }
+
+    index = out.index
+    out["team_a_rank_points"] = per_side["team_a"]["points"].set_axis(index).astype("Float64")
+    out["team_b_rank_points"] = per_side["team_b"]["points"].set_axis(index).astype("Float64")
+    elo_a = per_side["team_a"]["elo"].set_axis(index)
+    elo_b = per_side["team_b"]["elo"].set_axis(index)
+    out["provider_elo_prob"] = 1.0 / (1.0 + 10.0 ** ((elo_b - elo_a) / 400.0))
+    out["ranking_published_at"] = pd.concat(published, axis=1).max(axis=1).set_axis(index)
+    return out
+
+
 def build_feature_frame(
     raw_matches: pd.DataFrame,
     config: FeatureConfig | None = None,
+    rankings: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Turn raw matches into model-ready feature rows.
 
@@ -179,6 +278,11 @@ def build_feature_frame(
         raw_matches: frame satisfying the raw-match contract. May mix finished
             matches (``winner`` set) and upcoming ones (``winner`` null).
         config: feature parameters; defaults to ``config/settings.yaml``.
+        rankings: ranking snapshots (:data:`~padel_predictor.common.schemas.RAW_RANKING_COLUMNS`).
+            When given -- as every pipeline does -- ranking points and the
+            provider-Elo baseline come from the as-of join in
+            :func:`attach_rankings`, and the rank columns of ``raw_matches`` are
+            ignored. An empty frame means "no snapshot published yet".
 
     Returns:
         One row per input match, with :data:`KEY_COLUMNS`, :data:`FEATURE_COLUMNS`
@@ -188,7 +292,13 @@ def build_feature_frame(
     """
     matches = normalise_raw_matches(raw_matches)
     if matches.empty:
-        return pd.DataFrame(columns=[*KEY_COLUMNS, *FEATURE_COLUMNS, TARGET_COLUMN])
+        return pd.DataFrame(
+            columns=[*KEY_COLUMNS, *FEATURE_COLUMNS, *BASELINE_COLUMNS, TARGET_COLUMN]
+        )
+    if rankings is not None:
+        matches = attach_rankings(matches, rankings)
+    else:
+        matches = matches.assign(provider_elo_prob=float("nan"), ranking_published_at=pd.NaT)
 
     state = MatchState(config)
     rows: list[dict[str, object]] = []
@@ -198,7 +308,9 @@ def build_feature_frame(
         team_b = (match.team_b_player_1, match.team_b_player_2)
 
         # 1. Features first: the state holds only strictly earlier matches.
-        row: dict[str, object] = {key: getattr(match, key) for key in KEY_COLUMNS}
+        row: dict[str, object] = {
+            key: getattr(match, key) for key in (*KEY_COLUMNS, *BASELINE_COLUMNS)
+        }
         row.update(
             state.features_for(
                 team_a=team_a,
@@ -222,6 +334,8 @@ def build_feature_frame(
 
     features = pd.DataFrame(rows)
     features[list(FEATURE_COLUMNS)] = features[list(FEATURE_COLUMNS)].astype("float64")
+    features["provider_elo_prob"] = features["provider_elo_prob"].astype("float64")
+    features["ranking_published_at"] = pd.to_datetime(features["ranking_published_at"], utc=True)
     features[TARGET_COLUMN] = features[TARGET_COLUMN].astype("Int64")
     return features
 
