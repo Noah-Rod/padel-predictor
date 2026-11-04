@@ -1,6 +1,13 @@
 # Single image, three entrypoints: the pipelines, the API and the UI all run the
 # same code. Dependencies come from uv.lock, so the image is reproducible.
-FROM python:3.11-slim AS base
+
+# --- build stage: compilers are needed here only -------------------------------
+# hopsworks -> pyjks -> twofish ships as source only and needs a C compiler.
+FROM python:3.11-slim AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /usr/local/bin/uv
 
@@ -23,6 +30,17 @@ COPY src/ src/
 COPY config/ config/
 COPY ui/ ui/
 RUN uv sync --frozen --no-dev
+
+# --- runtime stage: the built environment, without the compiler ----------------
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/.venv/bin:$PATH"
+
+WORKDIR /app
+# Same base image and same path, so the virtualenv's interpreter links resolve.
+COPY --from=builder /app /app
 
 # Run as a non-root user.
 RUN useradd --create-home --uid 10001 padel \
