@@ -28,7 +28,7 @@ dependencies = [
 # Hosted feature store (hopsworks:// URIs). Optional because it pulls in twofish,
 # which builds from source and needs a C compiler (none by default on Windows);
 # the offline Parquet store, the tests and the http source run without it.
-hopsworks = ["hopsworks>=4.1,<5"]
+hopsworks = ["hopsworks[python]>=4.1,<5"]
 # Object-storage backend for the feature store (gs:// URIs).
 gcs = ["gcsfs>=2024.6,<2026"]
 
