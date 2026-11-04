@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     hopsworks_api_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="HOPSWORKS_API_KEY"
     )
-    # Empty means the serverless app at c.app.hopsworks.ai.
+    # Empty means the hosted serverless app (the client library's default host).
     hopsworks_host: str = Field(default="", validation_alias="HOPSWORKS_HOST")
 
     # Experiment tracking / model registry: "wandb" in production, "local" offline.

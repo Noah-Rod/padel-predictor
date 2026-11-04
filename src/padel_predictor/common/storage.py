@@ -230,8 +230,12 @@ def _feature_store(project: str) -> Any:
     key = settings.hopsworks_api_key.get_secret_value()
     if not key:
         raise RuntimeError("HOPSWORKS_API_KEY is not set; see .env.example")
+    # An empty HOPSWORKS_HOST (as an unset Actions variable arrives) must mean
+    # the hosted app: hopsworks.login reads the empty variable instead of its default.
+    from hopsworks_common.constants import HOSTS
+
     login = hopsworks.login(
-        host=settings.hopsworks_host or None, project=project, api_key_value=key
+        host=settings.hopsworks_host or HOSTS.SAAS_HOST, project=project, api_key_value=key
     )
     return login.get_feature_store()
 

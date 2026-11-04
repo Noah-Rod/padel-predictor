@@ -13,6 +13,13 @@ concurrency:
   group: inference-pipeline
   cancel-in-progress: true
 
+
+defaults:
+  run:
+    # pipefail: the commands are piped through tee, which would otherwise turn
+    # a failed pipeline into a green run.
+    shell: bash
+
 jobs:
   predict:
     name: predict upcoming matches
