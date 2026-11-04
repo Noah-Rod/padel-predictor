@@ -44,17 +44,24 @@ class Settings(BaseSettings):
     # current ranking only -- the fallback for anyone without a subscription.
     api_plan: str = Field(default="paid", validation_alias="PADEL_API_PLAN")
 
-    # Feature store (local path or object-storage URI such as gs://bucket/prefix)
+    # Feature store: hopsworks://<project> in production; a local path or a
+    # gs:// prefix selects the Parquet store used offline and in the tests.
     feature_store_uri: str = Field(
         default="data/feature_store", validation_alias="PADEL_FEATURE_STORE_URI"
     )
-
-    # Experiment tracking / model registry
-    mlflow_tracking_uri: str = Field(
-        default="sqlite:///mlflow.db", validation_alias="MLFLOW_TRACKING_URI"
+    hopsworks_api_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias="HOPSWORKS_API_KEY"
     )
-    mlflow_experiment_name: str = Field(
-        default="padel-predictor", validation_alias="MLFLOW_EXPERIMENT_NAME"
+    # Empty means the serverless app at c.app.hopsworks.ai.
+    hopsworks_host: str = Field(default="", validation_alias="HOPSWORKS_HOST")
+
+    # Experiment tracking / model registry: "wandb" in production, "local" offline.
+    tracking: str = Field(default="local", validation_alias="PADEL_TRACKING")
+    wandb_project: str = Field(default="padel-predictor", validation_alias="WANDB_PROJECT")
+    wandb_entity: str = Field(default="", validation_alias="WANDB_ENTITY")
+    wandb_api_key: SecretStr = Field(default=SecretStr(""), validation_alias="WANDB_API_KEY")
+    local_registry_dir: str = Field(
+        default="data/model_registry", validation_alias="PADEL_MODEL_REGISTRY_DIR"
     )
     registered_model_name: str = Field(
         default="padel-match-winner", validation_alias="PADEL_REGISTERED_MODEL_NAME"
@@ -74,7 +81,12 @@ class Settings(BaseSettings):
             "api_key": "<set>" if self.api_key.get_secret_value() else "<unset>",
             "api_plan": self.api_plan,
             "feature_store_uri": self.feature_store_uri,
-            "mlflow_tracking_uri": self.mlflow_tracking_uri,
+            "hopsworks_api_key": "<set>"
+            if self.hopsworks_api_key.get_secret_value()
+            else "<unset>",
+            "tracking": self.tracking,
+            "wandb_project": self.wandb_project,
+            "wandb_api_key": "<set>" if self.wandb_api_key.get_secret_value() else "<unset>",
             "registered_model_name": self.registered_model_name,
             "model_alias": self.model_alias,
         }
