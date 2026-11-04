@@ -85,7 +85,7 @@ def data_report() -> None:
 @app.command("training-pipeline")
 def training_pipeline(
     register: bool = typer.Option(
-        True, "--register/--no-register", help="Log to MLflow and promote if better."
+        True, "--register/--no-register", help="Log the run and promote the model if it is better."
     ),
 ) -> None:
     """Train a model, evaluate it against the champion, promote it if better."""
@@ -124,7 +124,7 @@ def matchup(
         f"{prediction.team_a} vs {prediction.team_b}\n"
         f"  P(team A wins) = {prediction.probability_team_a:.3f}\n"
         f"  predicted winner: team {prediction.predicted_winner}\n"
-        f"  model: {prediction.model_name} v{prediction.model_version}"
+        f"  model: {prediction.model_name}:{prediction.model_version}"
     )
 
 

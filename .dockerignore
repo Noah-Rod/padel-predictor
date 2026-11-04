@@ -10,7 +10,7 @@ __pycache__/
 htmlcov/
 .coverage
 data/
-mlruns/
+wandb/
 mlartifacts/
 models/
 notebooks/

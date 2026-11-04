@@ -16,9 +16,8 @@ data/
 *.sqlite3
 
 # --- Experiment tracking & model artifacts ---
-mlruns/
+wandb/
 mlartifacts/
-mlflow.db
 models/
 *.pkl
 *.joblib

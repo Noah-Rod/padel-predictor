@@ -1,23 +1,41 @@
-"""MLflow tracking and model registry.
+"""Experiment tracking and model registry.
 
-Every MLflow call in the project goes through this module. ``mlflow`` is
-imported lazily inside the functions so that importing the package -- which the
-unit tests and the feature pipeline do -- does not pay for it.
+Every tracking call in the project goes through this module. The backend is
+chosen by ``PADEL_TRACKING``:
 
-Model versions are addressed by *alias* (``@champion``) rather than by the
-deprecated stage API, so the inference pipeline asks for "the best model" and
-never hard-codes a version number.
+``wandb``
+    Weights & Biases, the production choice. A training run is a W&B run
+    (config, metrics, summary); every candidate is logged as a ``model``
+    artifact named after ``PADEL_REGISTERED_MODEL_NAME``, and the promoted one
+    carries the ``champion`` alias. W&B keeps an alias unique within an
+    artifact, so promoting a new version moves it off the old one.
+``local``
+    The same contract on disk under ``PADEL_MODEL_REGISTRY_DIR``, for the tests
+    and an offline clone without a W&B account.
+
+Models are addressed by *alias* (``champion``), so the inference pipeline asks
+for "the best model" and never hard-codes a version.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+import json
+import tempfile
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+import joblib
+import pandas as pd
 
 from padel_predictor.common.config import Settings, get_settings
 from padel_predictor.common.logging import get_logger
 
 logger = get_logger(__name__)
+
+MODEL_FILENAME = "model.joblib"
 
 
 @dataclass(frozen=True)
@@ -32,129 +50,49 @@ class ModelHandle:
 
     @property
     def uri(self) -> str:
-        return f"models:/{self.name}/{self.version}"
+        return f"{self.name}:{self.version}"
 
 
-def configure(settings: Settings | None = None) -> Any:
-    """Point MLflow at the configured tracking server and experiment."""
-    import mlflow
+class TrainingRun(Protocol):
+    """One tracked training run, whichever backend records it."""
 
+    run_id: str
+
+    def log_params(self, params: dict[str, Any]) -> None: ...
+
+    def log_metrics(self, metrics: dict[str, float]) -> None: ...
+
+    def set_tags(self, tags: dict[str, str]) -> None: ...
+
+    def log_model(self, model: Any, promote: bool, metadata: dict[str, Any]) -> ModelHandle: ...
+
+
+def _backend(settings: Settings) -> str:
+    backend = settings.tracking.strip().lower()
+    if backend not in {"wandb", "local"}:
+        raise ValueError(f"PADEL_TRACKING must be 'wandb' or 'local', got {settings.tracking!r}")
+    return backend
+
+
+@contextmanager
+def start_run(settings: Settings | None = None, name: str = "training"):
+    """Open a tracked run; it is closed (and flushed) when the block exits."""
     settings = settings or get_settings()
-    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-    mlflow.set_experiment(settings.mlflow_experiment_name)
-    return mlflow
-
-
-def get_client(settings: Settings | None = None) -> Any:
-    """An ``MlflowClient`` bound to the configured tracking URI."""
-    from mlflow.tracking import MlflowClient
-
-    settings = settings or get_settings()
-    return MlflowClient(tracking_uri=settings.mlflow_tracking_uri)
-
-
-def champion_version(settings: Settings | None = None) -> Any | None:
-    """The registered version currently carrying the champion alias, if any."""
-    settings = settings or get_settings()
+    run: _WandbRun | _LocalRun = (
+        _WandbRun(settings, name) if _backend(settings) == "wandb" else _LocalRun(settings, name)
+    )
     try:
-        return get_client(settings).get_model_version_by_alias(
-            settings.registered_model_name, settings.model_alias
-        )
-    except Exception as exc:  # noqa: BLE001 -- a missing model is the normal first-run case
-        logger.info(
-            "no %r alias on model %r yet (%s)",
-            settings.model_alias,
-            settings.registered_model_name,
-            type(exc).__name__,
-        )
-        return None
+        yield run
+    finally:
+        run.finish()
 
 
 def load_champion(settings: Settings | None = None) -> ModelHandle | None:
-    """Load the current champion model, or ``None`` when nothing is registered."""
-    import mlflow.sklearn
-
+    """Load the model carrying the champion alias, or ``None`` if there is none."""
     settings = settings or get_settings()
-    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-
-    version = champion_version(settings)
-    if version is None:
-        return None
-
-    model = mlflow.sklearn.load_model(
-        f"models:/{settings.registered_model_name}@{settings.model_alias}"
-    )
-    return ModelHandle(
-        model=model,
-        name=settings.registered_model_name,
-        version=str(version.version),
-        alias=settings.model_alias,
-        run_id=getattr(version, "run_id", None),
-    )
-
-
-def register_and_promote(
-    model: Any,
-    input_example: Any,
-    settings: Settings | None = None,
-) -> ModelHandle:
-    """Log the model to the active run, register it, and move the alias onto it.
-
-    Must be called inside an active MLflow run.
-    """
-    import mlflow
-    import mlflow.sklearn
-    from mlflow.models import infer_signature
-
-    settings = settings or get_settings()
-
-    # The signature declares what the service actually returns -- the probability
-    # that team A wins -- rather than the 0/1 label sklearn's `predict` would give.
-    signature = infer_signature(input_example, model.predict_proba(input_example)[:, 1])
-
-    info = mlflow.sklearn.log_model(
-        sk_model=model,
-        name="model",
-        input_example=input_example,
-        signature=signature,
-        # MLflow's default skops format refuses to serialise the boosted-tree
-        # predictors this project uses. Models here are produced and consumed by
-        # this repo's own pipelines, so cloudpickle is the appropriate format.
-        serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE,
-        registered_model_name=settings.registered_model_name,
-    )
-
-    client = get_client(settings)
-    version = _resolve_version(client, info, settings)
-    client.set_registered_model_alias(settings.registered_model_name, settings.model_alias, version)
-    logger.info(
-        "promoted %s version %s to alias %r",
-        settings.registered_model_name,
-        version,
-        settings.model_alias,
-    )
-    return ModelHandle(
-        model=model,
-        name=settings.registered_model_name,
-        version=str(version),
-        alias=settings.model_alias,
-        run_id=mlflow.active_run().info.run_id if mlflow.active_run() else None,
-    )
-
-
-def _resolve_version(client: Any, info: Any, settings: Settings) -> str:
-    """Find the version number just created by ``log_model``.
-
-    MLflow returns it on the ``ModelInfo`` in recent versions; older ones do
-    not, so fall back to the newest version of the registered model.
-    """
-    version = getattr(info, "registered_model_version", None)
-    if version is not None:
-        return str(version)
-    versions = client.search_model_versions(f"name='{settings.registered_model_name}'")
-    if not versions:
-        raise RuntimeError(f"no registered versions found for {settings.registered_model_name!r}")
-    return str(max(int(v.version) for v in versions))
+    if _backend(settings) == "wandb":
+        return _wandb_load(settings)
+    return _local_load(settings)
 
 
 def should_promote(
@@ -166,8 +104,8 @@ def should_promote(
 ) -> tuple[bool, str]:
     """Decide whether the candidate replaces the champion.
 
-    Returns the decision and a human-readable reason, which is logged to the
-    MLflow run so the promotion history is auditable.
+    Returns the decision and a human-readable reason, which is logged with the
+    run so the promotion history is auditable.
     """
     if champion is None:
         return True, "no champion registered yet"
@@ -177,3 +115,170 @@ def should_promote(
     if improvement >= min_improvement:
         return True, f"{metric} improved by {improvement:.4f} ({old:.4f} -> {new:.4f})"
     return False, f"{metric} did not improve enough: {improvement:.4f} < {min_improvement:.4f}"
+
+
+# --------------------------------------------------------------------------- #
+# Weights & Biases
+# --------------------------------------------------------------------------- #
+def _wandb_path(settings: Settings, api: Any, alias: str) -> str:
+    entity = settings.wandb_entity or api.default_entity
+    return f"{entity}/{settings.wandb_project}/{settings.registered_model_name}:{alias}"
+
+
+class _WandbRun:
+    def __init__(self, settings: Settings, name: str) -> None:
+        import wandb
+
+        self.settings = settings
+        self.run = wandb.init(
+            project=settings.wandb_project,
+            entity=settings.wandb_entity or None,
+            job_type=name,
+            name=name,
+        )
+        self.run_id = self.run.id
+
+    def log_params(self, params: dict[str, Any]) -> None:
+        self.run.config.update(params, allow_val_change=True)
+
+    def log_metrics(self, metrics: dict[str, float]) -> None:
+        self.run.log(metrics)
+        self.run.summary.update(metrics)
+
+    def set_tags(self, tags: dict[str, str]) -> None:
+        self.run.summary.update({f"tag/{k}": v for k, v in tags.items()})
+        if tags.get("promoted") == "True":
+            self.run.tags = (*self.run.tags, "promoted")
+
+    def log_model(self, model: Any, promote: bool, metadata: dict[str, Any]) -> ModelHandle:
+        import wandb
+
+        name = self.settings.registered_model_name
+        artifact = wandb.Artifact(name=name, type="model", metadata=metadata)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / MODEL_FILENAME
+            joblib.dump(model, path)
+            artifact.add_file(str(path))
+            aliases = ["latest", self.settings.model_alias] if promote else ["latest"]
+            logged = self.run.log_artifact(artifact, aliases=aliases)
+            if getattr(self.run, "offline", False):
+                # W&B assigns versions server-side; offline runs only sync later.
+                version = "offline"
+            else:
+                logged.wait()
+                version = str(logged.version)
+        logger.info("logged %s:%s (aliases %s)", name, version, aliases)
+        return ModelHandle(
+            model=model,
+            name=name,
+            version=version,
+            alias=self.settings.model_alias if promote else "latest",
+            run_id=self.run_id,
+        )
+
+    def finish(self) -> None:
+        self.run.finish()
+
+
+def _wandb_load(settings: Settings) -> ModelHandle | None:
+    import wandb
+
+    api = wandb.Api()
+    path = _wandb_path(settings, api, settings.model_alias)
+    try:
+        artifact = api.artifact(path, type="model")
+    except Exception as exc:  # noqa: BLE001 -- a missing alias is the normal first-run case
+        logger.info("no model at %s yet (%s)", path, type(exc).__name__)
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        model = joblib.load(Path(artifact.download(root=tmp)) / MODEL_FILENAME)
+    producer = artifact.logged_by()
+    return ModelHandle(
+        model=model,
+        name=settings.registered_model_name,
+        version=str(artifact.version),
+        alias=settings.model_alias,
+        run_id=producer.id if producer is not None else None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Local registry (offline, tests)
+# --------------------------------------------------------------------------- #
+#   <dir>/runs/<run_id>.json
+#   <dir>/<model>/v<N>/model.joblib + metadata.json
+#   <dir>/<model>/aliases.json        {"champion": "v3"}
+@dataclass
+class _LocalRun:
+    settings: Settings
+    name: str
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    record: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.root = Path(self.settings.local_registry_dir)
+        self.record = {
+            "run_id": self.run_id,
+            "name": self.name,
+            "started_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            "params": {},
+            "metrics": {},
+            "tags": {},
+        }
+
+    def log_params(self, params: dict[str, Any]) -> None:
+        self.record["params"].update({k: str(v) for k, v in params.items()})
+
+    def log_metrics(self, metrics: dict[str, float]) -> None:
+        self.record["metrics"].update({k: float(v) for k, v in metrics.items()})
+
+    def set_tags(self, tags: dict[str, str]) -> None:
+        self.record["tags"].update(tags)
+
+    def log_model(self, model: Any, promote: bool, metadata: dict[str, Any]) -> ModelHandle:
+        model_dir = self.root / self.settings.registered_model_name
+        existing = [int(p.name[1:]) for p in model_dir.glob("v*") if p.name[1:].isdigit()]
+        version = f"v{max(existing, default=0) + 1}"
+        target = model_dir / version
+        target.mkdir(parents=True, exist_ok=True)
+        joblib.dump(model, target / MODEL_FILENAME)
+        (target / "metadata.json").write_text(
+            json.dumps({**metadata, "run_id": self.run_id}, indent=2, default=str)
+        )
+        if promote:
+            aliases_file = model_dir / "aliases.json"
+            aliases = json.loads(aliases_file.read_text()) if aliases_file.is_file() else {}
+            aliases[self.settings.model_alias] = version
+            aliases_file.write_text(json.dumps(aliases, indent=2))
+        self.record["model_version"] = version
+        return ModelHandle(
+            model=model,
+            name=self.settings.registered_model_name,
+            version=version,
+            alias=self.settings.model_alias if promote else "latest",
+            run_id=self.run_id,
+        )
+
+    def finish(self) -> None:
+        runs = self.root / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / f"{self.run_id}.json").write_text(json.dumps(self.record, indent=2, default=str))
+
+
+def _local_load(settings: Settings) -> ModelHandle | None:
+    model_dir = Path(settings.local_registry_dir) / settings.registered_model_name
+    aliases_file = model_dir / "aliases.json"
+    if not aliases_file.is_file():
+        logger.info("no %r alias under %s yet", settings.model_alias, model_dir)
+        return None
+    version = json.loads(aliases_file.read_text()).get(settings.model_alias)
+    if version is None:
+        return None
+    metadata = json.loads((model_dir / version / "metadata.json").read_text())
+    return ModelHandle(
+        model=joblib.load(model_dir / version / MODEL_FILENAME),
+        name=settings.registered_model_name,
+        version=version,
+        alias=settings.model_alias,
+        run_id=metadata.get("run_id"),
+    )
