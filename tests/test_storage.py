@@ -112,7 +112,8 @@ def test_hopsworks_writes_upsert_into_the_dataset_s_feature_group(monkeypatch):
         storage.RAW_MATCHES,
         dt.date(2026, 1, 1),
     )
-    assert uri == "hopsworks://padel_predictor/raw_matches_v1"
+    assert uri == "hopsworks://padel_predictor/raw_matches_v2"
+    assert calls["time_travel_format"] == "DELTA"
     assert calls["primary_key"] == ["match_id"]
     assert calls["event_time"] == "played_at"
     assert calls["rows"] == 1 and calls["wait"] is True
