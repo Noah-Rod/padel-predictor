@@ -78,8 +78,15 @@ jobs:
           region: ${{ vars.GCP_REGION || 'europe-west6' }}
           env_vars: |
             PADEL_FEATURE_STORE_URI=${{ vars.PADEL_FEATURE_STORE_URI }}
-            MLFLOW_TRACKING_URI=${{ vars.MLFLOW_TRACKING_URI }}
+            HOPSWORKS_HOST=${{ vars.HOPSWORKS_HOST }}
+            PADEL_TRACKING=${{ vars.PADEL_TRACKING || 'wandb' }}
+            WANDB_PROJECT=${{ vars.WANDB_PROJECT || 'padel-predictor' }}
+            WANDB_ENTITY=${{ vars.WANDB_ENTITY }}
             PADEL_MODEL_ALIAS=${{ vars.PADEL_MODEL_ALIAS || 'champion' }}
+          # API keys come from Google Secret Manager, never from plain env vars.
+          secrets: |
+            HOPSWORKS_API_KEY=hopsworks-api-key:latest
+            WANDB_API_KEY=wandb-api-key:latest
 
   hugging-face:
     name: deploy the UI to a Hugging Face Space

@@ -1,7 +1,8 @@
 """Splitting, scoring and the promotion decision.
 
-MLflow is deliberately not exercised here: these tests cover the logic that
-decides *whether* a model ships, which is the part that can silently go wrong.
+These tests cover the logic that decides *whether* a model ships, which is the
+part that can silently go wrong, and the registry contract through the local
+backend: versions, the champion alias and loading it back.
 """
 
 from __future__ import annotations
@@ -125,7 +126,7 @@ def test_higher_is_better_metrics_compare_the_other_way():
 
 
 def test_training_runs_and_beats_the_majority_baseline(settings, config, many_matches):
-    """An end-to-end train with registration disabled: no MLflow, no registry."""
+    """An end-to-end train with registration disabled: no tracker, no registry."""
     from padel_predictor.common import storage
 
     features = build_feature_frame(many_matches, config.features)
@@ -222,3 +223,43 @@ def test_training_reports_the_gap_to_the_provider_elo(settings, config):
     ):
         assert np.isfinite(result.baselines[key])
     assert result.baselines["vs_provider_elo_ci_low"] <= result.baselines["vs_provider_elo_ci_high"]
+
+
+def test_local_registry_versions_models_and_moves_the_champion_alias(settings):
+    from sklearn.dummy import DummyClassifier
+
+    x, y = np.zeros((4, 1)), np.array([0, 1, 0, 1])
+    assert registry.load_champion(settings) is None
+
+    with registry.start_run(settings) as run:
+        first = run.log_model(DummyClassifier().fit(x, y), promote=True, metadata={})
+    with registry.start_run(settings) as run:
+        second = run.log_model(DummyClassifier().fit(x, y), promote=False, metadata={})
+    assert (first.version, second.version) == ("v1", "v2")
+    assert registry.load_champion(settings).version == "v1"
+
+    with registry.start_run(settings) as run:
+        third = run.log_model(DummyClassifier().fit(x, y), promote=True, metadata={})
+    champion = registry.load_champion(settings)
+    assert champion.version == third.version == "v3"
+    assert champion.run_id == third.run_id
+
+
+def test_training_registers_and_serves_the_champion(settings, config, many_matches):
+    from padel_predictor.common import storage
+    from padel_predictor.inference.predict import Predictor
+
+    features = build_feature_frame(many_matches, config.features)
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+    assert result.promoted
+    assert Predictor.load(settings, config).model_version == result.model_version
+
+
+def test_unknown_tracking_backend_is_rejected(monkeypatch):
+    from padel_predictor.common.config import Settings
+
+    monkeypatch.setenv("PADEL_TRACKING", "mlflow")
+    with pytest.raises(ValueError, match="PADEL_TRACKING"):
+        registry.load_champion(Settings())

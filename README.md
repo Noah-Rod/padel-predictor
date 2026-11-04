@@ -20,10 +20,20 @@ and promotes models, and an inference pipeline that serves predictions.
 
 ![FTI architecture](docs/architecture.svg)
 
+| Layer | Production | Offline (tests, fresh clone) |
+| --- | --- | --- |
+| Feature store | **Hopsworks** feature groups, `PADEL_FEATURE_STORE_URI=hopsworks://<project>` | versioned Parquet snapshots under `data/feature_store` |
+| Tracking & registry | **Weights & Biases** runs and `model` artifacts with a `champion` alias, `PADEL_TRACKING=wandb` | the same contract on disk under `data/model_registry` |
+| Orchestration | GitHub Actions cron + `workflow_dispatch` | the `padel` CLI |
+
+The offline backends exist so that a reviewer can clone and run everything
+without an account; the scheduled workflows use the hosted ones, because a
+GitHub Actions runner starts with an empty disk every time.
+
 | Pipeline | Trigger | What it does |
 | --- | --- | --- |
-| **1. Feature** | daily cron 04:15 UTC, plus backfill on demand | Fetches results and fixtures, rebuilds features, writes a dated snapshot to the feature store |
-| **2. Training** | weekly cron, plus on demand | Reads the feature store, trains, evaluates against an Elo baseline, registers and promotes to `@champion` if better |
+| **1. Feature** | daily cron 04:15 UTC, plus backfill on demand | Fetches results, fixtures and ranking snapshots, rebuilds features, upserts them into the Hopsworks feature store |
+| **2. Training** | weekly cron, plus on demand | Reads the feature store, trains, evaluates against the provider's Elo, logs the run to Weights & Biases and moves the `champion` alias if better |
 | **3. Inference** | daily cron 06:00 UTC, plus on demand from the UI | Loads the champion model, predicts upcoming fixtures, stores the predictions |
 
 ### What the model sees
@@ -110,7 +120,7 @@ uv run padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 0
 
 ```bash
 cp .env.example .env
-docker compose up --build            # mlflow + api + ui
+docker compose up --build            # api + ui
 docker compose run --rm pipelines padel backfill --start 2025-09-01 --end 2026-09-01
 docker compose run --rm pipelines padel training-pipeline
 ```
@@ -119,7 +129,6 @@ docker compose run --rm pipelines padel training-pipeline
 | --- | --- |
 | Streamlit UI | http://localhost:8501 |
 | API docs | http://localhost:8000/docs |
-| MLflow | http://localhost:5000 |
 
 ---
 
@@ -133,18 +142,22 @@ Two separate sources, so no secret is ever committed:
 | `.env` (see [`.env.example`](.env.example)) | Secrets and environment URIs: API keys, feature store, tracking server | **no** |
 
 In GitHub Actions the same names come from repository **variables** (non-secret,
-e.g. `PADEL_FEATURE_STORE_URI`) and **secrets** (`PADEL_API_KEY`, `GCP_SA_KEY`).
+e.g. `PADEL_FEATURE_STORE_URI`) and **secrets** (`PADEL_API_KEY`,
+`HOPSWORKS_API_KEY`, `WANDB_API_KEY`, `GCP_SA_KEY`). On Cloud Run the two API
+keys come from Secret Manager (`hopsworks-api-key`, `wandb-api-key`).
 
 ### Going live
 
 The scheduled workflows run on ephemeral runners, so anything written to local
 disk is discarded when the job ends. For the pipelines to actually accumulate
-state, set these repository variables:
+state, set the secrets `HOPSWORKS_API_KEY`, `WANDB_API_KEY` and `PADEL_API_KEY`,
+and these repository variables:
 
 | Variable | Example |
 | --- | --- |
-| `PADEL_FEATURE_STORE_URI` | `gs://your-bucket/padel-predictor` |
-| `MLFLOW_TRACKING_URI` | `https://your-mlflow-host` |
+| `PADEL_FEATURE_STORE_URI` | `hopsworks://padel_predictor` (your Hopsworks project) |
+| `PADEL_TRACKING` | `wandb` |
+| `WANDB_PROJECT` / `WANDB_ENTITY` | `padel-predictor` / your W&B user or team |
 | `PADEL_SOURCE` | `http` |
 | `PADEL_API_BASE_URL` | the live source's base URL |
 | `PADEL_API_PLAN` | `paid` (full archive + ranking history) or `free` |
@@ -166,9 +179,9 @@ The feature and training workflows emit a warning when these are still local.
 ```
 padel-predictor/
 ├── src/padel_predictor/
-│   ├── common/        config, storage, schemas, shared feature definitions
+│   ├── common/        config, feature store (Hopsworks / Parquet), schemas, features
 │   ├── features/      1. ingestion adapters, feature pipeline, backfill
-│   ├── training/      2. dataset split, MLflow registry, training pipeline
+│   ├── training/      2. dataset split, W&B registry, training pipeline
 │   ├── inference/     3. predictor, batch pipeline, FastAPI app
 │   └── cli.py         one command per pipeline
 ├── ui/                Streamlit front end

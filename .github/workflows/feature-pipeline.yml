@@ -34,6 +34,8 @@ jobs:
       PADEL_API_KEY: ${{ secrets.PADEL_API_KEY }}
       PADEL_API_PLAN: ${{ vars.PADEL_API_PLAN || 'paid' }}
       PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST }}
       HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
 
     steps:
@@ -55,11 +57,13 @@ jobs:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Warn about an ephemeral feature store
-        if: ${{ !startsWith(vars.PADEL_FEATURE_STORE_URI, 'gs://') }}
+        if: >-
+          ${{ !startsWith(vars.PADEL_FEATURE_STORE_URI, 'hopsworks://') &&
+              !startsWith(vars.PADEL_FEATURE_STORE_URI, 'gs://') }}
         run: |
-          echo "::warning::PADEL_FEATURE_STORE_URI is not a gs:// URI, so this run writes to the"
-          echo "::warning::runner's local disk and the data is discarded when the job ends."
-          echo "Set the PADEL_FEATURE_STORE_URI repository variable to a gs:// bucket." \
+          echo "::warning::PADEL_FEATURE_STORE_URI is not hopsworks://<project>, so this run writes to"
+          echo "::warning::the runner's local disk and the data is discarded when the job ends."
+          echo "Set the PADEL_FEATURE_STORE_URI repository variable to hopsworks://<project>." \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Backfill

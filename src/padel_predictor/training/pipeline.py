@@ -1,8 +1,9 @@
 """Training pipeline: feature store -> model -> registry.
 
 Run on a schedule and on demand by ``.github/workflows/training-pipeline.yml``.
-Every run is an MLflow run: parameters, metrics, baselines and the promotion
-decision are all logged, so "why is this model live?" has an answer.
+Every run is a tracked run (Weights & Biases in production): parameters,
+metrics, baselines and the promotion decision are all logged, so "why is this
+model live?" has an answer.
 """
 
 from __future__ import annotations
@@ -132,8 +133,8 @@ def run(
     """Train a candidate, compare it to the champion, promote it if it is better.
 
     Args:
-        register: when ``False``, train and evaluate but touch neither MLflow
-            nor the registry. Used by the tests.
+        register: when ``False``, train and evaluate but touch neither the
+            tracker nor the registry. Used by the tests.
     """
     settings = settings or get_settings()
     config = config or get_pipeline_config()
@@ -183,8 +184,7 @@ def _track_and_promote(
     settings: Settings,
     config: PipelineConfig,
 ) -> TrainingResult:
-    """Log the run to MLflow and promote the candidate if it beats the champion."""
-    mlflow = registry.configure(settings)
+    """Log the run and promote the candidate if it beats the champion."""
     promotion = config.training.promotion
 
     champion = registry.load_champion(settings)
@@ -200,8 +200,8 @@ def _track_and_promote(
         min_improvement=promotion.min_improvement,
     )
 
-    with mlflow.start_run(run_name="training") as run_ctx:
-        mlflow.log_params(
+    with registry.start_run(settings, name="training") as run:
+        run.log_params(
             {
                 **config.training.model.model_dump(),
                 "test_fraction": config.training.test_fraction,
@@ -213,10 +213,10 @@ def _track_and_promote(
                 "test_start": str(split.test_start),
             }
         )
-        mlflow.log_metrics({**metrics, **baselines})
+        run.log_metrics({**metrics, **baselines})
         if champion_metrics:
-            mlflow.log_metrics({f"champion_{k}": v for k, v in champion_metrics.items()})
-        mlflow.set_tags(
+            run.log_metrics({f"champion_{k}": v for k, v in champion_metrics.items()})
+        run.set_tags(
             {
                 "promoted": str(promote),
                 "promotion_reason": reason,
@@ -224,16 +224,16 @@ def _track_and_promote(
             }
         )
 
-        version: str | None = champion.version if champion else None
-        if promote:
-            handle = registry.register_and_promote(
-                model, input_example=split.x_train.head(5), settings=settings
-            )
-            version = handle.version
-        else:
-            logger.info("candidate not promoted: %s", reason)
-
-        logger.info("mlflow run %s finished", run_ctx.info.run_id)
+        # Every candidate is versioned; only a promoted one gets the champion alias.
+        handle = run.log_model(
+            model, promote=promote, metadata={**metrics, "promotion_reason": reason}
+        )
+        version: str | None = (
+            handle.version if promote else (champion.version if champion else None)
+        )
+        if not promote:
+            logger.info("candidate %s not promoted: %s", handle.version, reason)
+        logger.info("training run %s finished", run.run_id)
 
     result = TrainingResult(
         metrics=metrics,

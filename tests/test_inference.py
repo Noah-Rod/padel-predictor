@@ -1,7 +1,7 @@
 """Prediction and serving.
 
 A stub estimator stands in for the registered model so these tests cover the
-feature plumbing and the API contract without needing MLflow.
+feature plumbing and the API contract without needing a registry.
 """
 
 from __future__ import annotations

@@ -1,32 +1,21 @@
-# Local stack: tracking server, prediction API and UI.
+# Local stack: prediction API and UI. Tracking and the feature store are hosted
+# (W&B, Hopsworks) or, with the defaults from .env.example, local files in the
+# shared data volume.
 # Copy .env.example to .env first -- Compose reads it automatically.
 
 services:
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v3.16.1
-    command: >
-      mlflow server
-      --host 0.0.0.0
-      --port 5000
-      --backend-store-uri sqlite:////mlflow/mlflow.db
-      --artifacts-destination /mlflow/artifacts
-    ports:
-      - "5000:5000"
-    volumes:
-      - mlflow:/mlflow
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-
   api:
     build: .
     command: ["padel", "serve"]
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      PADEL_FEATURE_STORE_URI: /app/data/feature_store
+      PADEL_FEATURE_STORE_URI: ${PADEL_FEATURE_STORE_URI:-/app/data/feature_store}
+      HOPSWORKS_API_KEY: ${HOPSWORKS_API_KEY:-}
+      HOPSWORKS_HOST: ${HOPSWORKS_HOST:-}
+      PADEL_TRACKING: ${PADEL_TRACKING:-local}
+      PADEL_MODEL_REGISTRY_DIR: /app/data/model_registry
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-padel-predictor}
+      WANDB_ENTITY: ${WANDB_ENTITY:-}
       PADEL_SOURCE: ${PADEL_SOURCE:-sample}
       PADEL_API_BASE_URL: ${PADEL_API_BASE_URL:-}
       PADEL_API_KEY: ${PADEL_API_KEY:-}
@@ -35,17 +24,20 @@ services:
       - "8000:8000"
     volumes:
       - data:/app/data
-    depends_on:
-      mlflow:
-        condition: service_healthy
 
   ui:
     build: .
     command:
       ["streamlit", "run", "ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      PADEL_FEATURE_STORE_URI: /app/data/feature_store
+      PADEL_FEATURE_STORE_URI: ${PADEL_FEATURE_STORE_URI:-/app/data/feature_store}
+      HOPSWORKS_API_KEY: ${HOPSWORKS_API_KEY:-}
+      HOPSWORKS_HOST: ${HOPSWORKS_HOST:-}
+      PADEL_TRACKING: ${PADEL_TRACKING:-local}
+      PADEL_MODEL_REGISTRY_DIR: /app/data/model_registry
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-padel-predictor}
+      WANDB_ENTITY: ${WANDB_ENTITY:-}
       PADEL_API_URL: http://api:8000
     ports:
       - "8501:8501"
@@ -63,18 +55,20 @@ services:
     entrypoint: []
     command: ["padel", "--help"]
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
-      PADEL_FEATURE_STORE_URI: /app/data/feature_store
+      PADEL_FEATURE_STORE_URI: ${PADEL_FEATURE_STORE_URI:-/app/data/feature_store}
+      HOPSWORKS_API_KEY: ${HOPSWORKS_API_KEY:-}
+      HOPSWORKS_HOST: ${HOPSWORKS_HOST:-}
+      PADEL_TRACKING: ${PADEL_TRACKING:-local}
+      PADEL_MODEL_REGISTRY_DIR: /app/data/model_registry
+      WANDB_API_KEY: ${WANDB_API_KEY:-}
+      WANDB_PROJECT: ${WANDB_PROJECT:-padel-predictor}
+      WANDB_ENTITY: ${WANDB_ENTITY:-}
       PADEL_SOURCE: ${PADEL_SOURCE:-sample}
       PADEL_API_BASE_URL: ${PADEL_API_BASE_URL:-}
       PADEL_API_KEY: ${PADEL_API_KEY:-}
       PADEL_API_PLAN: ${PADEL_API_PLAN:-paid}
     volumes:
       - data:/app/data
-    depends_on:
-      mlflow:
-        condition: service_healthy
 
 volumes:
   data:
-  mlflow:
