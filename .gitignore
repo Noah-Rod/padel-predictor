@@ -48,3 +48,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Received peer reviews and editorial summaries (ILIAS only, never published)
+docs/reviews/
