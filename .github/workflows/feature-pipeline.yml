@@ -32,6 +32,7 @@ jobs:
       PADEL_SOURCE: ${{ vars.PADEL_SOURCE || 'sample' }}
       PADEL_API_BASE_URL: ${{ vars.PADEL_API_BASE_URL }}
       PADEL_API_KEY: ${{ secrets.PADEL_API_KEY }}
+      PADEL_API_PLAN: ${{ vars.PADEL_API_PLAN || 'paid' }}
       PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
       HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
 

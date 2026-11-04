@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     source: str = Field(default="sample", validation_alias="PADEL_SOURCE")
     api_base_url: str = Field(default="", validation_alias="PADEL_API_BASE_URL")
     api_key: SecretStr = Field(default=SecretStr(""), validation_alias="PADEL_API_KEY")
+    # "paid": full archive and ranking history. "free": last six months and the
+    # current ranking only -- the fallback for anyone without a subscription.
+    api_plan: str = Field(default="paid", validation_alias="PADEL_API_PLAN")
 
     # Feature store (local path or object-storage URI such as gs://bucket/prefix)
     feature_store_uri: str = Field(
@@ -69,6 +72,7 @@ class Settings(BaseSettings):
             "source": self.source,
             "api_base_url": self.api_base_url or "<unset>",
             "api_key": "<set>" if self.api_key.get_secret_value() else "<unset>",
+            "api_plan": self.api_plan,
             "feature_store_uri": self.feature_store_uri,
             "mlflow_tracking_uri": self.mlflow_tracking_uri,
             "registered_model_name": self.registered_model_name,
@@ -83,6 +87,15 @@ class IngestionConfig(BaseModel):
     lookback_days: int = 7
     timeout_seconds: float = 30.0
     max_retries: int = 3
+    # Ranking snapshots are re-read this many days before a window, so the
+    # snapshot in force at the window's first match is always in the store.
+    rankings_lookback_days: int = 14
+    # Backfilled snapshots carry no publication time. They are treated as
+    # published this many days after the date they are labelled with, so a
+    # snapshot labelled with a tournament week is never visible inside it.
+    rankings_publication_lag_days: int = 7
+    # How far back the free plan reaches.
+    free_plan_history_days: int = 183
 
 
 class FeatureConfig(BaseModel):
@@ -106,12 +119,18 @@ class PromotionConfig(BaseModel):
     min_improvement: float = 0.002
 
 
+class EvaluationConfig(BaseModel):
+    bootstrap_samples: int = 2000
+    confidence: float = 0.95
+
+
 class TrainingConfig(BaseModel):
     test_fraction: float = 0.2
     min_training_rows: int = 200
     random_state: int = 42
     model: ModelConfig = Field(default_factory=ModelConfig)
     promotion: PromotionConfig = Field(default_factory=PromotionConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
 
 class InferenceConfig(BaseModel):

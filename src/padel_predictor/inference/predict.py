@@ -62,6 +62,14 @@ class Prediction:
         return asdict(self)
 
 
+def load_rankings(settings: Settings | None = None) -> pd.DataFrame:
+    """Read every ranking snapshot from the feature store (empty if none yet)."""
+    from padel_predictor.features.pipeline import load_rankings as _load
+
+    settings = settings or get_settings()
+    return _load(settings.feature_store_uri)
+
+
 def load_history(settings: Settings | None = None) -> pd.DataFrame:
     """Read the deduplicated raw match history from the feature store."""
     settings = settings or get_settings()
@@ -76,9 +84,16 @@ def load_history(settings: Settings | None = None) -> pd.DataFrame:
 class Predictor:
     """The champion model plus the feature logic needed to feed it."""
 
-    def __init__(self, handle: ModelHandle, config: PipelineConfig | None = None) -> None:
+    def __init__(
+        self,
+        handle: ModelHandle,
+        config: PipelineConfig | None = None,
+        rankings: pd.DataFrame | None = None,
+    ) -> None:
         self.handle = handle
         self.config = config or get_pipeline_config()
+        #: Ranking snapshots joined as-of each match, exactly as in training.
+        self.rankings = rankings
 
     @classmethod
     def load(
@@ -95,7 +110,7 @@ class Predictor:
                 f"{settings.registered_model_name!r}; run the training pipeline first"
             )
         logger.info("loaded model %s version %s", handle.name, handle.version)
-        return cls(handle, config)
+        return cls(handle, config, rankings=load_rankings(settings))
 
     @property
     def model_version(self) -> str:
@@ -114,8 +129,11 @@ class Predictor:
         out = features.copy()
         out["probability_team_a"] = self.probabilities(features)
         out["predicted_winner"] = out["probability_team_a"].map(lambda p: "A" if p >= 0.5 else "B")
+        # Which model served which prediction: monitoring scores the last
+        # pre-match prediction per match, so every row carries its provenance.
         out["model_name"] = self.handle.name
         out["model_version"] = self.handle.version
+        out["model_run_id"] = self.handle.run_id
         out["predicted_at"] = pd.Timestamp.now(tz="UTC")
         return out
 
@@ -129,7 +147,7 @@ class Predictor:
         horizon = horizon_days if horizon_days is not None else self.config.inference.horizon_days
         now = now or pd.Timestamp.now(tz="UTC")
 
-        features = build_feature_frame(history, self.config.features)
+        features = build_feature_frame(history, self.config.features, rankings=self.rankings)
         upcoming = unlabelled(features)
         cutoff = now + pd.Timedelta(days=horizon)
         upcoming = upcoming.loc[upcoming["played_at"] <= cutoff].reset_index(drop=True)
@@ -182,7 +200,7 @@ class Predictor:
             )
         )
 
-        features = build_feature_frame(combined, self.config.features)
+        features = build_feature_frame(combined, self.config.features, rankings=self.rankings)
         row = features.loc[features["match_id"] == AD_HOC_MATCH_ID]
         if row.empty:  # pragma: no cover -- defensive
             raise RuntimeError("the ad-hoc match did not survive feature building")

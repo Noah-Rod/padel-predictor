@@ -27,7 +27,9 @@ from padel_predictor.training import registry
 from padel_predictor.training.dataset import (
     Split,
     baseline_metrics,
+    bootstrap_log_loss_difference,
     classification_metrics,
+    provider_elo_probabilities,
     time_split,
 )
 
@@ -52,7 +54,10 @@ class TrainingResult:
             f"train={self.train_rows} test={self.test_rows} "
             f"log_loss={self.metrics['log_loss']:.4f} "
             f"accuracy={self.metrics['accuracy']:.4f} "
-            f"(elo baseline {self.baselines['baseline_elo_log_loss']:.4f}) "
+            f"(provider elo {self.baselines['baseline_provider_elo_log_loss']:.4f}, "
+            f"diff {self.baselines['vs_provider_elo_log_loss_diff']:+.4f} "
+            f"[{self.baselines['vs_provider_elo_ci_low']:+.4f}, "
+            f"{self.baselines['vs_provider_elo_ci_high']:+.4f}]) "
             f"promoted={self.promoted} [{self.reason}]"
         )
 
@@ -99,6 +104,26 @@ def evaluate(model: Any, split: Split) -> dict[str, float]:
     return classification_metrics(split.y_test, proba)
 
 
+def compare_to_provider_elo(model: Any, split: Split, config: PipelineConfig) -> dict[str, float]:
+    """The success criterion: a bootstrap interval on the gap to the provider's Elo."""
+    evaluation = config.training.evaluation
+    provider_prob, _ = provider_elo_probabilities(split)
+    result = bootstrap_log_loss_difference(
+        split.y_test,
+        model.predict_proba(split.x_test)[:, 1],
+        provider_prob,
+        samples=evaluation.bootstrap_samples,
+        confidence=evaluation.confidence,
+        seed=config.training.random_state,
+    )
+    return {
+        "vs_provider_elo_log_loss_diff": result["mean"],
+        "vs_provider_elo_ci_low": result["ci_low"],
+        "vs_provider_elo_ci_high": result["ci_high"],
+        "beats_provider_elo": result["beats_baseline"],
+    }
+
+
 def run(
     settings: Settings | None = None,
     config: PipelineConfig | None = None,
@@ -133,7 +158,7 @@ def run(
     model = build_model(config)
     model.fit(split.x_train, split.y_train)
     metrics = evaluate(model, split)
-    baselines = baseline_metrics(split)
+    baselines = {**baseline_metrics(split), **compare_to_provider_elo(model, split, config)}
 
     if not register:
         return TrainingResult(
@@ -191,7 +216,13 @@ def _track_and_promote(
         mlflow.log_metrics({**metrics, **baselines})
         if champion_metrics:
             mlflow.log_metrics({f"champion_{k}": v for k, v in champion_metrics.items()})
-        mlflow.set_tags({"promoted": str(promote), "promotion_reason": reason})
+        mlflow.set_tags(
+            {
+                "promoted": str(promote),
+                "promotion_reason": reason,
+                "beats_provider_elo": str(bool(baselines["beats_provider_elo"])),
+            }
+        )
 
         version: str | None = champion.version if champion else None
         if promote:

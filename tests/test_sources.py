@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pandas as pd
 import pytest
 
 from padel_predictor.common.config import IngestionConfig, Settings
@@ -69,9 +70,13 @@ def test_http_records_are_mapped_onto_the_schema():
     assert len(out) == 1
     row = out.iloc[0]
     assert row["match_id"] == "42"
-    assert row["team_a_player_1"] == "A1"
-    assert row["team_b_rank_points"] == 2400
-    assert row["winner"] == "A"
+    # Sides are re-assigned by hash, so check the pairing, not the position.
+    side_of_a1 = "a" if "A1" in (row["team_a_player_1"], row["team_a_player_2"]) else "b"
+    assert {row[f"team_{side_of_a1}_player_1"], row[f"team_{side_of_a1}_player_2"]} == {"A1", "A2"}
+    other = "b" if side_of_a1 == "a" else "a"
+    assert row[f"team_{other}_rank_points"] == 2400
+    # The pair listed first won, wherever it ended up.
+    assert row["winner"] == side_of_a1.upper()
 
 
 def test_malformed_http_records_are_dropped_not_filled():
@@ -107,3 +112,44 @@ def test_http_source_resolves_when_configured(monkeypatch):
     source = get_source("http", Settings(), IngestionConfig())
     assert isinstance(source, HttpMatchSource)
     assert source.base_url == "https://example.test/api"
+
+
+def test_sample_rankings_are_published_monday_before_the_week_s_matches():
+    rankings = SampleMatchSource().fetch_rankings(dt.date(2026, 3, 1), dt.date(2026, 3, 31))
+    assert not rankings.empty
+    assert (rankings["published_at"].dt.weekday == 0).all()
+    assert rankings["provider_elo"].notna().all()
+
+
+def test_backfilled_snapshot_without_publication_time_counts_as_published_a_week_later():
+    fetched_at = pd.Timestamp("2026-06-01T00:00Z")
+    out = HttpMatchSource.parse_ranking_records(
+        [{"player": {"name": "A1"}, "date": "2026-01-05", "points": 900, "elo": 1610}],
+        fetched_at=fetched_at,
+        publication_lag=pd.Timedelta(days=7),
+    )
+    row = out.iloc[0]
+    assert row["snapshot_date"] == pd.Timestamp("2026-01-05", tz="UTC")
+    assert row["published_at"] == pd.Timestamp("2026-01-12", tz="UTC")
+    assert row["provider_elo"] == 1610
+
+
+def test_explicit_publication_time_wins_and_lag_never_passes_the_fetch_time():
+    fetched_at = pd.Timestamp("2026-01-07T09:00Z")
+    out = HttpMatchSource.parse_ranking_records(
+        [
+            {"player": "A1", "date": "2026-01-05", "published_at": "2026-01-05T10:00Z"},
+            {"player": "A2", "date": "2026-01-05"},
+        ],
+        fetched_at=fetched_at,
+    )
+    by_player = out.set_index("player")["published_at"]
+    assert by_player["A1"] == pd.Timestamp("2026-01-05T10:00Z")
+    assert by_player["A2"] == fetched_at
+
+
+def test_http_source_rejects_an_unknown_plan(monkeypatch):
+    monkeypatch.setenv("PADEL_API_BASE_URL", "https://example.test/api")
+    monkeypatch.setenv("PADEL_API_PLAN", "gold")
+    with pytest.raises(ValueError, match="PADEL_API_PLAN"):
+        HttpMatchSource(Settings(), IngestionConfig())

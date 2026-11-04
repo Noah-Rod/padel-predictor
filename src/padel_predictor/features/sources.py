@@ -29,8 +29,12 @@ from padel_predictor.common.config import IngestionConfig, Settings
 from padel_predictor.common.logging import get_logger
 from padel_predictor.common.schemas import (
     RAW_MATCH_COLUMNS,
+    RAW_RANKING_COLUMNS,
     empty_raw_matches,
+    empty_raw_rankings,
     normalise_raw_matches,
+    normalise_raw_rankings,
+    orient_teams,
 )
 
 logger = get_logger(__name__)
@@ -45,6 +49,10 @@ class MatchSource(Protocol):
         """Return matches with ``start <= played_at.date() <= end``."""
         ...
 
+    def fetch_rankings(self, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """Return ranking snapshots labelled ``start <= snapshot_date <= end``."""
+        ...
+
 
 # --------------------------------------------------------------------------- #
 # Synthetic source
@@ -57,6 +65,9 @@ SAMPLE_ROUNDS = ("R32", "R16", "QF", "SF", "F")
 #: Tournaments run Wednesday to Sunday.
 SAMPLE_MATCH_WEEKDAYS = frozenset({2, 3, 4, 5, 6})
 SAMPLE_MATCHES_PER_DAY = 6
+#: Synthetic rankings are labelled with the Monday of each week and published
+#: that Monday morning, before the Wednesday start of the week's tournament.
+SAMPLE_RANKING_PUBLISH_TIME = dt.time(hour=8, tzinfo=dt.UTC)
 
 
 def _player_name(index: int) -> str:
@@ -102,6 +113,41 @@ class SampleMatchSource:
             return empty_raw_matches()
         return normalise_raw_matches(pd.DataFrame(records))
 
+    def fetch_rankings(self, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """Weekly snapshots: official points and a provider Elo per player.
+
+        The provider Elo is a noisy view of the same latent strength the match
+        outcomes are drawn from, so the synthetic baseline is good but beatable.
+        """
+        if start > end:
+            raise ValueError(f"start {start} is after end {end}")
+        now = dt.datetime.now(dt.UTC)
+        monday = start - dt.timedelta(days=start.weekday())
+        if monday < start:
+            monday += dt.timedelta(days=7)
+
+        records: list[dict[str, Any]] = []
+        while monday <= end:
+            published_at = dt.datetime.combine(monday, SAMPLE_RANKING_PUBLISH_TIME)
+            if published_at <= now:
+                rng = self._day_rng(monday)
+                for index in range(SAMPLE_PLAYER_COUNT):
+                    strength = _player_strength(index)
+                    records.append(
+                        {
+                            "player": _player_name(index),
+                            "snapshot_date": monday,
+                            "published_at": published_at,
+                            "rank_points": round(1000 + 300 * strength + rng.normal(0, 40), 1),
+                            "provider_elo": round(1500 + 180 * strength + rng.normal(0, 60), 1),
+                        }
+                    )
+            monday += dt.timedelta(days=7)
+
+        if not records:
+            return empty_raw_rankings()
+        return normalise_raw_rankings(pd.DataFrame(records))
+
     def _matches_for_day(self, day: dt.date, now: dt.datetime) -> list[dict[str, Any]]:
         rng = self._day_rng(day)
         tier = SAMPLE_TIERS[day.isocalendar().week % len(SAMPLE_TIERS)]
@@ -133,8 +179,9 @@ class SampleMatchSource:
                     "team_a_player_2": _player_name(a2),
                     "team_b_player_1": _player_name(b1),
                     "team_b_player_2": _player_name(b2),
-                    "team_a_rank_points": round(2000 + 600 * strength_a, 1),
-                    "team_b_rank_points": round(2000 + 600 * strength_b, 1),
+                    # Ranking points come from the weekly snapshots, not the match.
+                    "team_a_rank_points": None,
+                    "team_b_rank_points": None,
                     "winner": winner,
                 }
             )
@@ -156,6 +203,9 @@ class HttpMatchSource:
     name = "http"
 
     def __init__(self, settings: Settings, config: IngestionConfig) -> None:
+        self.plan = settings.api_plan.strip().lower()
+        if self.plan not in {"paid", "free"}:
+            raise ValueError(f"PADEL_API_PLAN must be 'paid' or 'free', got {settings.api_plan!r}")
         if not settings.api_base_url:
             raise ValueError(
                 "PADEL_API_BASE_URL is not set; set it in .env (see .env.example) "
@@ -187,6 +237,88 @@ class HttpMatchSource:
         records = payload.get("matches", []) if isinstance(payload, dict) else payload
         logger.info("fetched %d records from %s for %s..%s", len(records), url, start, end)
         return self.parse_records(records)
+
+    def _get(self, path: str, params: dict[str, str]) -> Any:
+        transport = httpx.HTTPTransport(retries=self.config.max_retries)
+        with httpx.Client(timeout=self.config.timeout_seconds, transport=transport) as client:
+            response = client.get(f"{self.base_url}{path}", params=params, headers=self._headers())
+            response.raise_for_status()
+            return response.json()
+
+    def fetch_rankings(self, start: dt.date, end: dt.date) -> pd.DataFrame:
+        """Ranking snapshots for a window.
+
+        The paid plan reads the weekly ranking history. The free plan only has
+        the current ranking, which is stored as a snapshot published *now*: it
+        therefore only ever joins onto matches that start after this run, never
+        onto history.
+        """
+        if start > end:
+            raise ValueError(f"start {start} is after end {end}")
+        now = pd.Timestamp.now(tz="UTC")
+        if self.plan == "free":
+            payload = self._get("/rankings", {})
+            records = payload.get("rankings", []) if isinstance(payload, dict) else payload
+            return self.parse_ranking_records(
+                records, fetched_at=now, default_snapshot_date=now.normalize()
+            )
+
+        payload = self._get("/rankings/history", {"from": start.isoformat(), "to": end.isoformat()})
+        records = payload.get("rankings", []) if isinstance(payload, dict) else payload
+        logger.info("fetched %d ranking records for %s..%s", len(records), start, end)
+        return self.parse_ranking_records(
+            records,
+            fetched_at=now,
+            publication_lag=pd.Timedelta(days=self.config.rankings_publication_lag_days),
+        )
+
+    @staticmethod
+    def parse_ranking_records(
+        records: list[dict[str, Any]],
+        fetched_at: pd.Timestamp,
+        publication_lag: pd.Timedelta | None = None,
+        default_snapshot_date: pd.Timestamp | None = None,
+    ) -> pd.DataFrame:
+        """Map the provider's ranking payload onto the ranking schema.
+
+        ``published_at`` is the join key, so it is never guessed optimistically:
+        the provider's own publication time when it sends one, otherwise the
+        label date plus ``publication_lag``, and never later than ``fetched_at``
+        would make it -- a snapshot cannot have been available after we saw it,
+        but it may have been available later than its label suggests.
+        """
+        if not records:
+            return empty_raw_rankings()
+        publication_lag = pd.Timedelta(days=7) if publication_lag is None else publication_lag
+        rows: list[dict[str, Any]] = []
+        for record in records:
+            try:
+                player = record["player"]
+                name = player["name"] if isinstance(player, dict) else player
+                label = record.get("date") or record.get("snapshot_date") or default_snapshot_date
+                if label is None:
+                    raise KeyError("date")
+                label_ts = pd.Timestamp(label)
+                label_ts = label_ts.tz_localize("UTC") if label_ts.tzinfo is None else label_ts
+                published = record.get("published_at")
+                if published:
+                    published_ts = pd.Timestamp(published)
+                else:
+                    published_ts = min(label_ts + publication_lag, fetched_at)
+                rows.append(
+                    {
+                        "player": name,
+                        "snapshot_date": label_ts,
+                        "published_at": published_ts,
+                        "rank_points": record.get("points"),
+                        "provider_elo": record.get("elo"),
+                    }
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("skipping malformed ranking record: %s", exc)
+        if not rows:
+            return empty_raw_rankings()
+        return normalise_raw_rankings(pd.DataFrame(rows, columns=list(RAW_RANKING_COLUMNS)))
 
     @staticmethod
     def parse_records(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -223,7 +355,9 @@ class HttpMatchSource:
 
         if not rows:
             return empty_raw_matches()
-        return normalise_raw_matches(pd.DataFrame(rows, columns=list(RAW_MATCH_COLUMNS)))
+        frame = normalise_raw_matches(pd.DataFrame(rows, columns=list(RAW_MATCH_COLUMNS)))
+        # The provider lists the higher seed first; sides are re-assigned by hash.
+        return orient_teams(frame)
 
 
 def get_source(
