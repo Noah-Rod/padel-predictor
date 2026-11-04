@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from padel_predictor.common import storage
 
@@ -115,3 +116,33 @@ def test_hopsworks_writes_upsert_into_the_dataset_s_feature_group(monkeypatch):
     assert calls["primary_key"] == ["match_id"]
     assert calls["event_time"] == "played_at"
     assert calls["rows"] == 1 and calls["wait"] is True
+
+
+def test_an_empty_hopsworks_host_logs_in_to_the_hosted_app(monkeypatch):
+    """Actions passes an unset HOPSWORKS_HOST as an empty string, not as absent."""
+    hopsworks = pytest.importorskip("hopsworks")
+    from hopsworks_common.constants import HOSTS
+
+    from padel_predictor.common.config import reset_caches
+
+    calls = []
+
+    class Login:
+        def get_feature_store(self):
+            return "fs"
+
+    def fake_login(**kwargs):
+        calls.append(kwargs)
+        return Login()
+
+    monkeypatch.setenv("HOPSWORKS_HOST", "")
+    monkeypatch.setenv("HOPSWORKS_API_KEY", "key")
+    monkeypatch.setattr(hopsworks, "login", fake_login)
+    reset_caches()
+    storage._feature_store.cache_clear()
+    try:
+        assert storage._feature_store("padel") == "fs"
+    finally:
+        storage._feature_store.cache_clear()
+    assert calls[0]["host"] == HOSTS.SAAS_HOST
+    assert calls[0]["project"] == "padel"

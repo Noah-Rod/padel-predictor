@@ -23,6 +23,13 @@ concurrency:
   group: feature-pipeline
   cancel-in-progress: false
 
+
+defaults:
+  run:
+    # pipefail: the commands are piped through tee, which would otherwise turn
+    # a failed pipeline into a green run.
+    shell: bash
+
 jobs:
   run:
     name: ingest and build features
