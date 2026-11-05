@@ -29,7 +29,8 @@ p { margin: 0 0 4.5pt 0; text-align: justify; }
 ul { margin: 0 0 4.5pt 0; padding-left: 16pt; }
 li { margin: 0 0 1.5pt 0; }
 code { font-family: "Liberation Mono", "DejaVu Sans Mono", monospace; font-size: 8.6pt; }
-table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 3pt 0 5pt 0; }
+table { border-collapse: collapse; width: 100%; font-size: 8.8pt; margin: 3pt 0 5pt 0;
+        page-break-inside: avoid; }
 th, td { border: 1px solid #bbb; padding: 2pt 4pt; vertical-align: top; text-align: left; }
 th { background: #f0f0f0; }
 img, svg { width: 92%; height: auto; display: block; margin: 3pt auto 4pt auto; }
