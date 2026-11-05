@@ -38,16 +38,19 @@ of the store can be reproduced.
 from __future__ import annotations
 
 import datetime as dt
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pandas as pd
 
 from padel_predictor.common.logging import get_logger
 
 logger = get_logger(__name__)
+T = TypeVar("T")
 
 HOPSWORKS_SCHEME = "hopsworks://"
 
@@ -216,6 +219,49 @@ def hopsworks_project_name(uri: str) -> str:
     return name
 
 
+#: Waits before each retry of a Hopsworks call that lost its connection.
+HOPSWORKS_RETRY_DELAYS: tuple[float, ...] = (5.0, 20.0, 60.0)
+_sleep = time.sleep
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """A dropped or refused connection, as opposed to an error in the request."""
+    if isinstance(exc, ConnectionError | TimeoutError):
+        return True
+    try:
+        import requests
+    except ModuleNotFoundError:  # pragma: no cover -- requests ships with hopsworks
+        return False
+    return isinstance(exc, requests.exceptions.ConnectionError | requests.exceptions.Timeout)
+
+
+def _with_reconnect(action: str, call: Callable[[], T]) -> T:
+    """Run a Hopsworks call; on a dropped connection, log in again and retry.
+
+    A backfill holds one session for over an hour, and the hosted app closes
+    idle or long-lived TLS connections. Inserts are upserts on the primary key,
+    so repeating one that may have half-arrived is safe.
+    """
+    for attempt, delay in enumerate((*HOPSWORKS_RETRY_DELAYS, None), start=1):
+        try:
+            return call()
+        except Exception as exc:
+            if delay is None or not _is_transient(exc):
+                raise
+            logger.warning(
+                "%s lost the Hopsworks connection (%s); new login in %.0fs, attempt %d",
+                action,
+                type(exc).__name__,
+                delay,
+                attempt + 1,
+            )
+            _sleep(delay)
+            clear = getattr(_feature_store, "cache_clear", None)
+            if clear is not None:
+                clear()
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 @lru_cache(maxsize=4)
 def _feature_store(project: str) -> Any:
     """Log in once per process and return the project's feature store."""
@@ -266,34 +312,43 @@ def _hopsworks_write(df: pd.DataFrame, base_uri: str, dataset: str, snapshot_dat
     if df.empty:
         logger.info("nothing to write to %s", target)
         return target
-    fs = _feature_store(hopsworks_project_name(base_uri))
-    group = fs.get_or_create_feature_group(
-        name=spec.name,
-        version=spec.version,
-        description=spec.description,
-        primary_key=list(spec.primary_key),
-        event_time=spec.event_time,
-        online_enabled=False,
-        # DELTA offline-only groups are written by the python engine directly
-        # (hops-deltalake); any other format streams the upload through Kafka.
-        time_travel_format="DELTA",
-    )
-    group.insert(to_hopsworks_frame(df, dataset, snapshot_date), wait=True)
+    frame = to_hopsworks_frame(df, dataset, snapshot_date)
+
+    def insert() -> None:
+        fs = _feature_store(hopsworks_project_name(base_uri))
+        group = fs.get_or_create_feature_group(
+            name=spec.name,
+            version=spec.version,
+            description=spec.description,
+            primary_key=list(spec.primary_key),
+            event_time=spec.event_time,
+            online_enabled=False,
+            # DELTA offline-only groups are written by the python engine directly
+            # (hops-deltalake); any other format streams the upload through Kafka.
+            time_travel_format="DELTA",
+        )
+        group.insert(frame, wait=True)
+
+    _with_reconnect(f"writing {spec.name}", insert)
     logger.info("upserted %d rows into %s", len(df), target)
     return target
 
 
 def _hopsworks_read(base_uri: str, dataset: str) -> pd.DataFrame:
     spec = FEATURE_GROUPS[dataset]
-    fs = _feature_store(hopsworks_project_name(base_uri))
-    try:
+
+    def read() -> pd.DataFrame | None:
+        fs = _feature_store(hopsworks_project_name(base_uri))
+        # hsfs answers a missing group with None. Any exception is a real
+        # failure and must not pass for "no data": a rebuild without its
+        # rankings would silently drop every ranking feature.
         group = fs.get_feature_group(name=spec.name, version=spec.version)
-    except Exception as exc:  # noqa: BLE001 -- hsfs raises its own types for "not found"
-        logger.warning("feature group %s not found (%s)", spec.name, type(exc).__name__)
+        return None if group is None else group.read(dataframe_type="pandas")
+
+    frame = _with_reconnect(f"reading {spec.name}", read)
+    if frame is None:
+        logger.info("feature group %s does not exist yet", spec.name)
         return pd.DataFrame()
-    if group is None:
-        return pd.DataFrame()
-    frame = group.read(dataframe_type="pandas")
     if dataset == PREDICTIONS:
         frame = frame.drop(columns=["run_date"], errors="ignore")
     return frame
