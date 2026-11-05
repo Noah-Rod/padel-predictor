@@ -43,6 +43,8 @@ jobs:
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       WANDB_PROJECT: ${{ vars.WANDB_PROJECT || 'padel-predictor' }}
       WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+      # Recorded on every run, so free- and paid-plan results stay apart in W&B.
+      PADEL_API_PLAN: ${{ vars.PADEL_API_PLAN || 'paid' }}
       HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
 
     steps:
