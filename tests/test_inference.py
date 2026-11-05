@@ -108,6 +108,24 @@ def test_predict_upcoming_respects_the_horizon(predictor, config):
     assert out["match_id"].tolist() == ["soon"]
 
 
+def test_stale_unlabelled_matches_are_not_upcoming_but_today_s_are(predictor):
+    """A match the provider never closed is not a fixture; today's undated one is."""
+    from padel_predictor.common.schemas import normalise_raw_matches
+    from tests.conftest import make_match
+
+    now = pd.Timestamp("2026-11-05T14:00Z")
+    records = [
+        make_match("stale", "2025-06-01T10:00Z", ("P1", "P2"), ("P3", "P4"), None),
+        make_match("yesterday", "2026-11-04T18:00Z", ("P1", "P2"), ("P3", "P4"), None),
+        make_match("today-undated", "2026-11-05T00:00Z", ("P1", "P2"), ("P3", "P4"), None),
+        make_match("tomorrow", "2026-11-06T09:00Z", ("P1", "P2"), ("P3", "P4"), None),
+    ]
+    frame = normalise_raw_matches(pd.DataFrame(records))
+
+    out = predictor.predict_upcoming(frame, horizon_days=7, now=now)
+    assert sorted(out["match_id"]) == ["today-undated", "tomorrow"]
+
+
 def test_known_players_are_sorted_and_unique(history):
     players = known_players(history)
     assert players == sorted(set(players))

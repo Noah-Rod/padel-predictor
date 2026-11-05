@@ -143,14 +143,22 @@ class Predictor:
         horizon_days: int | None = None,
         now: pd.Timestamp | None = None,
     ) -> pd.DataFrame:
-        """Predict every unplayed match inside the horizon."""
+        """Predict every unplayed match from today up to the horizon.
+
+        The window starts at midnight UTC today, not at ``now``: a match without
+        an announced time is stored at midnight of its day, so a later match
+        today would otherwise be skipped. Unlabelled matches from earlier days
+        are not upcoming -- the provider sometimes never closes a match -- and
+        predicting them after the fact would only pollute the predictions.
+        """
         horizon = horizon_days if horizon_days is not None else self.config.inference.horizon_days
         now = now or pd.Timestamp.now(tz="UTC")
 
         features = build_feature_frame(history, self.config.features, rankings=self.rankings)
         upcoming = unlabelled(features)
-        cutoff = now + pd.Timedelta(days=horizon)
-        upcoming = upcoming.loc[upcoming["played_at"] <= cutoff].reset_index(drop=True)
+        start, cutoff = now.normalize(), now + pd.Timedelta(days=horizon)
+        in_window = (upcoming["played_at"] >= start) & (upcoming["played_at"] <= cutoff)
+        upcoming = upcoming.loc[in_window].reset_index(drop=True)
 
         logger.info("predicting %d upcoming matches within %d days", len(upcoming), horizon)
         return self.predict_frame(upcoming)
