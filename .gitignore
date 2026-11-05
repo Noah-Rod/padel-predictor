@@ -17,6 +17,7 @@ data/
 
 # --- Experiment tracking & model artifacts ---
 wandb/
+mlruns/
 mlartifacts/
 models/
 *.pkl
