@@ -147,3 +147,80 @@ def test_an_empty_hopsworks_host_logs_in_to_the_hosted_app(monkeypatch):
         storage._feature_store.cache_clear()
     assert calls[0]["host"] == HOSTS.SAAS_HOST
     assert calls[0]["project"] == "padel"
+
+
+class _Group:
+    def __init__(self, calls):
+        self.calls = calls
+
+    def insert(self, df, wait):
+        self.calls.append(("insert", len(df)))
+
+    def read(self, dataframe_type):
+        return pd.DataFrame({"match_id": ["m1"]})
+
+
+def test_a_missing_hopsworks_group_reads_as_empty(monkeypatch):
+    class Store:
+        def get_feature_group(self, name, version):
+            return None  # what hsfs answers for a group that does not exist
+
+    monkeypatch.setattr(storage, "_feature_store", lambda project: Store())
+    assert storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS).empty
+
+
+def test_a_dropped_hopsworks_connection_is_retried_with_a_new_login(monkeypatch):
+    """A backfill outlives one TLS connection; a reset must not end it."""
+    calls, logins = [], []
+
+    class Store:
+        def __init__(self, fails):
+            self.fails = fails
+
+        def get_or_create_feature_group(self, **kwargs):
+            if self.fails:
+                raise ConnectionError("EOF occurred in violation of protocol")
+            return _Group(calls)
+
+    def feature_store(project):
+        logins.append(project)
+        return Store(fails=len(logins) == 1)
+
+    feature_store.cache_clear = lambda: calls.append("relogin")
+    monkeypatch.setattr(storage, "_feature_store", feature_store)
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+
+    storage.write_snapshot(
+        pd.DataFrame({"match_id": ["m1"], "played_at": [pd.Timestamp("2026-01-01", tz="UTC")]}),
+        "hopsworks://padel_predictor",
+        storage.RAW_MATCHES,
+        dt.date(2026, 1, 1),
+    )
+    assert calls == ["relogin", ("insert", 1)]
+    assert len(logins) == 2
+
+
+def test_a_persistent_hopsworks_failure_is_raised_not_read_as_no_data(monkeypatch):
+    class Store:
+        def get_feature_group(self, name, version):
+            raise ConnectionError("connection reset")
+
+    monkeypatch.setattr(storage, "_feature_store", lambda project: Store())
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+    with pytest.raises(ConnectionError):
+        storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
+
+
+def test_a_bad_request_is_not_retried(monkeypatch):
+    attempts = []
+
+    class Store:
+        def get_feature_group(self, name, version):
+            attempts.append(1)
+            raise ValueError("schema mismatch")
+
+    monkeypatch.setattr(storage, "_feature_store", lambda project: Store())
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+    with pytest.raises(ValueError):
+        storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
+    assert len(attempts) == 1
