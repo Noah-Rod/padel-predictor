@@ -182,3 +182,53 @@ def bootstrap_log_loss_difference(
         "ci_high": float(high),
         "beats_baseline": float(high < 0.0),
     }
+
+
+def covered_comparison(
+    y_true: pd.Series,
+    model_proba: np.ndarray,
+    provider_raw: np.ndarray,
+    samples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> dict[str, float]:
+    """Model against provider Elo on only the matches the provider has a rating for.
+
+    The headline comparison fills a missing provider rating with 0.5, so the bar
+    is never set on a friendlier subset -- but a coin flip on those matches
+    flatters the model. Scoring both on the covered matches alone is the fair
+    head-to-head: it answers whether the model beats the provider where the
+    provider has something to say. ``provider_raw`` is NaN where it has not.
+    """
+    covered = np.isfinite(provider_raw)
+    n = int(covered.sum())
+    nan = float("nan")
+    if n == 0:
+        return {
+            "covered_rows": 0.0,
+            "covered_model_log_loss": nan,
+            "covered_provider_elo_log_loss": nan,
+            "covered_model_accuracy": nan,
+            "covered_provider_elo_accuracy": nan,
+            "covered_vs_provider_elo_log_loss_diff": nan,
+            "covered_vs_provider_elo_ci_low": nan,
+            "covered_vs_provider_elo_ci_high": nan,
+            "covered_beats_provider_elo": 0.0,
+        }
+    y = pd.Series(np.asarray(y_true)[covered])
+    model = np.asarray(model_proba)[covered]
+    provider = provider_raw[covered]
+    gap = bootstrap_log_loss_difference(
+        y, model, provider, samples=samples, confidence=confidence, seed=seed
+    )
+    return {
+        "covered_rows": float(n),
+        "covered_model_log_loss": float(per_match_log_loss(y, model).mean()),
+        "covered_provider_elo_log_loss": float(per_match_log_loss(y, provider).mean()),
+        "covered_model_accuracy": float(((model >= 0.5) == (y.to_numpy() == 1)).mean()),
+        "covered_provider_elo_accuracy": float(((provider >= 0.5) == (y.to_numpy() == 1)).mean()),
+        "covered_vs_provider_elo_log_loss_diff": gap["mean"],
+        "covered_vs_provider_elo_ci_low": gap["ci_low"],
+        "covered_vs_provider_elo_ci_high": gap["ci_high"],
+        "covered_beats_provider_elo": gap["beats_baseline"],
+    }
