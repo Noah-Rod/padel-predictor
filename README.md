@@ -22,13 +22,15 @@ and promotes models, and an inference pipeline that serves predictions.
 
 | Layer | Production | Offline (tests, fresh clone) |
 | --- | --- | --- |
-| Feature store | **Hopsworks** feature groups, `PADEL_FEATURE_STORE_URI=hopsworks://<project>` | versioned Parquet snapshots under `data/feature_store` |
-| Tracking & registry | **Weights & Biases** runs and `model` artifacts with a `champion` alias, `PADEL_TRACKING=wandb` | the same contract on disk under `data/model_registry` |
+| Feature store | **Hopsworks** offline DELTA feature groups (`raw_matches_v2`, `raw_rankings_v2`, `match_features_v2`, `predictions_v2`), `PADEL_FEATURE_STORE_URI=hopsworks://<project>` | versioned Parquet snapshots under `data/feature_store` |
+| Tracking & registry | **Weights & Biases** runs (tagged `plan-free` / `plan-paid`) and `model` artifacts with a `champion` alias, `PADEL_TRACKING=wandb` | the same contract on disk under `data/model_registry` |
 | Orchestration | GitHub Actions cron + `workflow_dispatch` | the `padel` CLI |
 
 The offline backends exist so that a reviewer can clone and run everything
 without an account; the scheduled workflows use the hosted ones, because a
-GitHub Actions runner starts with an empty disk every time.
+GitHub Actions runner starts with an empty disk every time. Every feature run
+ends with `padel data-report` in its step summary: counts per season and tier
+and the baselines on the test split, read back from the store.
 
 | Pipeline | Trigger | What it does |
 | --- | --- | --- |
@@ -62,7 +64,7 @@ probability (`provider_elo_prob`, mean of the two players' provider Elo) is
 stored next to each feature row and scored on exactly the same test matches as
 the model.
 
-Two design decisions carry most of the weight:
+A few design decisions carry most of the weight:
 
 - **One feature definition.** Training and inference both import
   `build_feature_frame` from [`src/padel_predictor/common/features.py`](src/padel_predictor/common/features.py).
@@ -77,6 +79,10 @@ Two design decisions carry most of the weight:
   snapshots without a publication time count as published seven days after
   their label date. Unit tests cover the published-after-the-week and
   published-exactly-at-the-start cases.
+- **Same-day rounds replay in draw order.** Matches without an announced start
+  time fall back to midnight of the day played, so several rounds of one event
+  can share a timestamp. Ties are broken by round, so a quarter-final is never
+  replayed before that day's round of 16 and cannot leak into it.
 
 ---
 
