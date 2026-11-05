@@ -20,6 +20,12 @@ and promotes models, and an inference pipeline that serves predictions.
 
 ![FTI architecture](docs/architecture.svg)
 
+### How it runs
+
+Which tool does what, what starts each workflow, and what flows where:
+
+![Tools, triggers and data flow](docs/system.svg)
+
 | Layer | Production | Offline (tests, fresh clone) |
 | --- | --- | --- |
 | Feature store | **Hopsworks** offline DELTA feature groups (`raw_matches_v2`, `raw_rankings_v2`, `match_features_v2`, `predictions_v2`), `PADEL_FEATURE_STORE_URI=hopsworks://<project>` | versioned Parquet snapshots under `data/feature_store` |
