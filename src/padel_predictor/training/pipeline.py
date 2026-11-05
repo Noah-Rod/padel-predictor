@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.pipeline import Pipeline
@@ -30,6 +31,7 @@ from padel_predictor.training.dataset import (
     baseline_metrics,
     bootstrap_log_loss_difference,
     classification_metrics,
+    covered_comparison,
     provider_elo_probabilities,
     time_split,
 )
@@ -58,7 +60,13 @@ class TrainingResult:
             f"(provider elo {self.baselines['baseline_provider_elo_log_loss']:.4f}, "
             f"diff {self.baselines['vs_provider_elo_log_loss_diff']:+.4f} "
             f"[{self.baselines['vs_provider_elo_ci_low']:+.4f}, "
-            f"{self.baselines['vs_provider_elo_ci_high']:+.4f}]) "
+            f"{self.baselines['vs_provider_elo_ci_high']:+.4f}]; "
+            f"covered {self.baselines['covered_rows']:.0f}: "
+            f"model {self.baselines['covered_model_log_loss']:.4f} "
+            f"vs provider {self.baselines['covered_provider_elo_log_loss']:.4f}, "
+            f"diff {self.baselines['covered_vs_provider_elo_log_loss_diff']:+.4f} "
+            f"[{self.baselines['covered_vs_provider_elo_ci_low']:+.4f}, "
+            f"{self.baselines['covered_vs_provider_elo_ci_high']:+.4f}]) "
             f"promoted={self.promoted} [{self.reason}]"
         )
 
@@ -109,9 +117,10 @@ def compare_to_provider_elo(model: Any, split: Split, config: PipelineConfig) ->
     """The success criterion: a bootstrap interval on the gap to the provider's Elo."""
     evaluation = config.training.evaluation
     provider_prob, _ = provider_elo_probabilities(split)
+    model_proba = model.predict_proba(split.x_test)[:, 1]
     result = bootstrap_log_loss_difference(
         split.y_test,
-        model.predict_proba(split.x_test)[:, 1],
+        model_proba,
         provider_prob,
         samples=evaluation.bootstrap_samples,
         confidence=evaluation.confidence,
@@ -122,6 +131,16 @@ def compare_to_provider_elo(model: Any, split: Split, config: PipelineConfig) ->
         "vs_provider_elo_ci_low": result["ci_low"],
         "vs_provider_elo_ci_high": result["ci_high"],
         "beats_provider_elo": result["beats_baseline"],
+        **covered_comparison(
+            split.y_test,
+            model_proba,
+            pd.to_numeric(split.meta_test["provider_elo_prob"], errors="coerce").to_numpy(float)
+            if "provider_elo_prob" in split.meta_test.columns
+            else np.full(len(split.y_test), np.nan),
+            samples=evaluation.bootstrap_samples,
+            confidence=evaluation.confidence,
+            seed=config.training.random_state,
+        ),
     }
 
 
@@ -223,6 +242,9 @@ def _track_and_promote(
                 "promoted": str(promote),
                 "promotion_reason": reason,
                 "beats_provider_elo": str(bool(baselines["beats_provider_elo"])),
+                "beats_provider_elo_where_covered": str(
+                    bool(baselines["covered_beats_provider_elo"])
+                ),
                 "data_plan": settings.api_plan,
             }
         )

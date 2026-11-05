@@ -263,3 +263,33 @@ def test_unknown_tracking_backend_is_rejected(monkeypatch):
     monkeypatch.setenv("PADEL_TRACKING", "mlflow")
     with pytest.raises(ValueError, match="PADEL_TRACKING"):
         registry.load_champion(Settings())
+
+
+def test_the_covered_comparison_ignores_matches_without_a_provider_rating():
+    """Where the provider has no rating, its 0.5 must not count against it."""
+    from padel_predictor.training.dataset import covered_comparison
+
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 400)
+    # Both predictors are equally good where the provider has a rating ...
+    calibrated = np.where(y == 1, 0.7, 0.3)
+    provider = calibrated.copy()
+    # ... and the model is near-perfect on the 200 matches the provider lacks.
+    model = calibrated.copy()
+    model[200:] = np.where(y[200:] == 1, 0.99, 0.01)
+    provider[200:] = np.nan
+
+    out = covered_comparison(y, model, provider, samples=300)
+
+    assert out["covered_rows"] == 200
+    assert out["covered_model_log_loss"] == pytest.approx(out["covered_provider_elo_log_loss"])
+    assert out["covered_vs_provider_elo_ci_low"] <= 0 <= out["covered_vs_provider_elo_ci_high"]
+    assert out["covered_beats_provider_elo"] == 0.0
+
+
+def test_the_covered_comparison_is_empty_without_any_provider_rating():
+    from padel_predictor.training.dataset import covered_comparison
+
+    out = covered_comparison(np.array([0, 1]), np.array([0.4, 0.6]), np.full(2, np.nan))
+    assert out["covered_rows"] == 0
+    assert out["covered_beats_provider_elo"] == 0.0
