@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="700" viewBox="0 0 1280 700" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="12" fill="#111827">
+  <title>How the padel predictor runs: tools, triggers and data flow</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#374151"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="700" fill="#ffffff"/>
+
+  <text x="20" y="32" font-size="16" font-weight="bold">How it runs: tools, triggers and data flow</text>
+
+  <!-- ===== row 0: CI/deploy and W&B ===== -->
+  <rect x="240" y="55" width="240" height="115" rx="8" fill="#f9fafb" stroke="#6b7280" stroke-width="1.2"/>
+  <text x="252" y="76" font-weight="bold">Also in GitHub Actions</text>
+  <text x="252" y="96">CI · every push and PR:</text>
+  <text x="252" y="113" fill="#4b5563">ruff · pytest 3.11 + 3.12 · Docker</text>
+  <text x="252" y="136">Deploy · push to main:</text>
+  <text x="252" y="153" fill="#4b5563">image → Cloud Run (MS4)</text>
+
+  <rect x="540" y="55" width="520" height="115" rx="8" fill="#fdf2f8" stroke="#db2777" stroke-width="1.5"/>
+  <text x="800" y="78" text-anchor="middle" font-weight="bold" font-size="13" fill="#9d174d">Weights &amp; Biases · experiment tracking + model registry</text>
+  <text x="800" y="100" text-anchor="middle">entity noahrod-hochschule-luzern · project padel-predictor</text>
+  <text x="800" y="120" text-anchor="middle">one run per training, tagged plan-free / plan-paid: metrics + all baselines</text>
+  <text x="800" y="140" text-anchor="middle">model artifact padel-match-winner · alias <tspan font-weight="bold">champion</tspan> = the model inference serves</text>
+  <text x="800" y="158" text-anchor="middle" fill="#6b7280" font-size="11">offline: the same contract on disk (data/model_registry)</text>
+
+  <!-- ===== row 1: GitHub Actions pipelines ===== -->
+  <rect x="225" y="192" width="850" height="193" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="240" y="211" font-weight="bold" fill="#3730a3">GitHub Actions runners</text>
+
+  <!-- source -->
+  <rect x="20" y="225" width="180" height="145" rx="8" fill="#f9fafb" stroke="#374151" stroke-width="1.5"/>
+  <text x="110" y="247" text-anchor="middle" font-weight="bold" font-size="13">padelapi.org</text>
+  <text x="110" y="265" text-anchor="middle" font-size="11" fill="#4b5563">REST · JSON · bearer token</text>
+  <text x="32" y="287">/tournaments</text>
+  <text x="32" y="304">/tournaments/{id}/matches</text>
+  <text x="32" y="321">/rankings (weekly)</text>
+  <text x="110" y="347" text-anchor="middle" font-size="11" fill="#4b5563">paced: 55/min Plus, 9/min free</text>
+
+  <!-- feature -->
+  <rect x="240" y="225" width="240" height="145" rx="8" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="252" y="247" font-weight="bold" font-size="13" fill="#065f46">1 · Feature pipeline</text>
+  <text x="252" y="264" font-size="11" fill="#065f46">daily 04:15 UTC · backfill on demand</text>
+  <text x="252" y="284">• fetch 7 days back, 7 ahead</text>
+  <text x="252" y="301">• drop byes, dedupe match_id</text>
+  <text x="252" y="318">• rebuild features (features.py)</text>
+  <text x="252" y="335">• rankings as of published_at</text>
+  <text x="252" y="352">• data report → step summary</text>
+
+  <!-- training -->
+  <rect x="540" y="225" width="240" height="145" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="552" y="247" font-weight="bold" font-size="13" fill="#1e40af">2 · Training pipeline</text>
+  <text x="552" y="264" font-size="11" fill="#1e40af">after each feature run · Mon 05:30</text>
+  <text x="552" y="284">• split at a tournament boundary</text>
+  <text x="552" y="301">• gradient-boosted classifier</text>
+  <text x="552" y="318">• vs provider Elo, in-house Elo</text>
+  <text x="552" y="335">• bootstrap 95 % interval</text>
+  <text x="552" y="352">• promote only if it beats champion</text>
+
+  <!-- inference -->
+  <rect x="840" y="225" width="220" height="145" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="852" y="247" font-weight="bold" font-size="13" fill="#5b21b6">3 · Inference pipeline</text>
+  <text x="852" y="264" font-size="11" fill="#5b21b6">daily 06:00 UTC · on demand</text>
+  <text x="852" y="284">• load the champion model</text>
+  <text x="852" y="301">• score drawn fixtures</text>
+  <text x="863" y="318">up to 7 days ahead</text>
+  <text x="852" y="335">• store each prediction with</text>
+  <text x="863" y="352">model version + time</text>
+
+  <!-- serving -->
+  <rect x="1100" y="225" width="160" height="145" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="1180" y="247" text-anchor="middle" font-weight="bold" font-size="13">Google Cloud Run</text>
+  <text x="1180" y="264" text-anchor="middle" font-size="11" fill="#4b5563">MS4 · Docker image</text>
+  <text x="1112" y="287">FastAPI /predict</text>
+  <text x="1112" y="304">Streamlit UI</text>
+  <text x="1112" y="321">P(A wins) per match</text>
+  <text x="1180" y="352" text-anchor="middle" font-size="11" fill="#4b5563">→ padel fans</text>
+
+  <!-- ===== row 2: Hopsworks ===== -->
+  <rect x="240" y="420" width="820" height="100" rx="8" fill="#fffbeb" stroke="#d97706" stroke-width="1.5"/>
+  <text x="650" y="443" text-anchor="middle" font-weight="bold" font-size="13" fill="#92400e">Hopsworks feature store · eu-west.cloud.hopsworks.ai · project padel_predictor</text>
+  <text x="650" y="463" text-anchor="middle">offline DELTA feature groups, upserted on their primary key, with an event time</text>
+  <text x="650" y="482" text-anchor="middle">raw_matches_v2 (match_id) · raw_rankings_v2 (player, snapshot_date; joined on published_at)</text>
+  <text x="650" y="499" text-anchor="middle">match_features_v2 (match_id) · predictions_v2 (match_id, run_date)</text>
+  <text x="650" y="514" text-anchor="middle" fill="#6b7280" font-size="11">offline: versioned Parquet snapshots under data/feature_store</text>
+
+  <!-- ===== row 3: configuration ===== -->
+  <rect x="240" y="548" width="820" height="62" rx="8" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.2"/>
+  <text x="252" y="570"><tspan font-weight="bold">GitHub secrets</tspan>  PADEL_API_KEY · HOPSWORKS_API_KEY · WANDB_API_KEY (never in the repo; .env locally)</text>
+  <text x="252" y="590"><tspan font-weight="bold">GitHub variables</tspan>  PADEL_SOURCE=http · PADEL_API_PLAN · PADEL_FEATURE_STORE_URI · PADEL_TRACKING=wandb · WANDB_ENTITY</text>
+  <text x="252" y="604" fill="#6b7280" font-size="11">pipeline behaviour (levels, Elo K, model, promotion rule) lives in config/settings.yaml</text>
+
+  <text x="20" y="645" fill="#4b5563">Without any key (tests, a fresh clone): the sample source, the Parquet store and the on-disk registry run the same three pipelines through the same contracts.</text>
+  <text x="20" y="683" fill="#4b5563">Every workflow can also be started by hand (workflow_dispatch); each step runs the padel CLI from this repo, installed with uv sync --frozen.</text>
+  <text x="20" y="664" fill="#4b5563">One feature definition: training and inference both call build_feature_frame from src/padel_predictor/common/features.py.</text>
+
+  <!-- ===== arrows ===== -->
+  <g stroke="#374151" stroke-width="1.6" fill="none">
+    <!-- padelapi -> feature -->
+    <path d="M200,297 H238" marker-end="url(#a)"/>
+    <!-- feature -> training trigger -->
+    <path d="M480,297 H538" stroke-dasharray="5 3" marker-end="url(#a)"/>
+    <!-- feature -> hopsworks -->
+    <path d="M360,370 V418" marker-end="url(#a)"/>
+    <!-- hopsworks -> training -->
+    <path d="M610,420 V372" marker-end="url(#a)"/>
+    <!-- training -> w&b -->
+    <path d="M700,225 V172" marker-end="url(#a)"/>
+    <!-- w&b -> inference -->
+    <path d="M950,170 V223" marker-end="url(#a)"/>
+    <!-- inference <-> hopsworks -->
+    <path d="M950,372 V418" marker-start="url(#a)" marker-end="url(#a)"/>
+    <!-- w&b -> cloud run -->
+    <path d="M1060,112 H1180 V223" stroke-dasharray="6 4" marker-end="url(#a)"/>
+    <!-- hopsworks -> cloud run -->
+    <path d="M1060,470 H1180 V372" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  </g>
+  <g font-size="11" fill="#374151">
+    <text x="219" y="290" text-anchor="middle">pull</text>
+    <text x="510" y="289" text-anchor="middle" font-size="10">on success</text>
+    <text x="368" y="400">write raw + features</text>
+    <text x="618" y="400">read labelled rows</text>
+    <text x="708" y="186">log run · promote</text>
+    <text x="958" y="186">load champion</text>
+    <text x="958" y="400">fixtures in · predictions out</text>
+    <text x="1188" y="186">champion</text>
+    <text x="1188" y="400">predictions</text>
+  </g>
+</svg>

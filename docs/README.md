@@ -18,6 +18,7 @@ the PDF before 23:59 — not the morning after.
 | File | Purpose |
 | --- | --- |
 | `architecture.svg` | The FTI diagram. Embedded in the root `README.md`; embed it in `proposal.pdf` too (the proposal must not use an ASCII diagram). |
+| `system.svg` | How the system runs: padelapi.org, the three GitHub Actions pipelines and their triggers, Hopsworks, W&B and Cloud Run, with the secrets and variables each needs. Embedded in the root `README.md`. |
 | `proposal.md` | Working draft of the proposal. Edit it, then export to `proposal.pdf`. |
 | `build_pdf.py` | Markdown to PDF export used for every milestone document. |
 | `milestone_summary_template.md` | Structure for each `ms<n>_summary.pdf`, including the response-to-reviewers format. |
