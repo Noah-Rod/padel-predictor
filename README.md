@@ -190,8 +190,8 @@ a match counts as a fixture once both pairs are drawn. `/rankings` gives one
 weekly snapshot per Monday of the official points and the provider's Elo (top
 200 per category). Requests are paced under the plan's per-minute limit, a
 `429` waits for `Retry-After`, and a used-up daily quota stops the run with a
-clear error, so a backfill is resumed by running it again. A year of history
-costs roughly 1,000 requests, about 20 minutes on the paid plan.
+clear error, so a backfill is resumed by running it again. What a run costs is
+under "Limits and quotas" below.
 
 **Without a subscription.** `PADEL_API_PLAN=free` runs the same pipeline on the
 provider's free tier: the backfill is clamped to the last six months and, as
@@ -202,6 +202,63 @@ not break. With no key at all, the default `sample` source runs everything
 offline.
 
 The feature and training workflows emit a warning when these are still local.
+
+### Limits and quotas
+
+What bounds the system, and what a run actually cost. Measured numbers come from
+the November 2026 runs; the provider limits are from padelapi.org's docs.
+
+**padelapi.org**
+
+| Limit | Free | Plus (paid) | How the pipeline handles it |
+| --- | --- | --- | --- |
+| Requests per minute | 10 | 60 | paced to 9 and 55 (`ingestion.requests_per_minute`) |
+| Requests per day | 2,000 | 4,000 | a `429` with a long `Retry-After` stops the run cleanly; rerun to resume |
+| Requests per month | 50,000 | 50,000 | a daily run needs about 25 (free) to 60 (paid) |
+| Match history | last 6 months | full archive | `PADEL_API_PLAN=free` clamps the backfill to 183 days |
+| Ranking history | latest snapshot only | weekly snapshots | free: stored as published at fetch time, never joined onto history |
+| Page size | 50 | 50 | every list endpoint is paged |
+
+Results the free plan hides come back as `hidden_free_plan` and are dropped,
+not turned into fixtures; a resource outside the plan answers `402`.
+
+**What a run costs (measured)**
+
+| Run | Requests | Time | Where the time goes |
+| --- | --- | --- | --- |
+| Daily feature run | about 25 | 5 to 6 min | ranking lists (16 requests), Hopsworks writes |
+| Free backfill, 6 months | 188 | 26 min | pacing at 9/min |
+| Paid backfill, one year | about 850 | about 60 min | weekly ranking snapshots (16 requests each) and Hopsworks writes of 30 s to 3.5 min per chunk |
+| Training run | 0 | about 1.5 min | dependency install, reading the features |
+
+A paid backfill back to 2023 needs about 3,000 requests: under the daily quota,
+but well over one workflow run. Run it in ranges of about a year; each chunk is
+upserted, so a range that stops part-way loses nothing and the next run
+continues from where it got to.
+
+**GitHub Actions**
+
+| Limit | Value | Why |
+| --- | --- | --- |
+| Feature workflow timeout | 120 min (`timeout-minutes`) | fits a one-year paid backfill; GitHub's own ceiling is 6 h per job |
+| Training / inference timeout | 45 / 20 min | a stuck run fails instead of blocking the next one |
+| Concurrency | one run per pipeline (`concurrency` groups, not cancelled) | two runs must never write the feature store at once |
+| Minutes | free for this public repository on standard runners | |
+| Schedules | can start late under load; GitHub disables them after 60 days without repository activity | every workflow also has `workflow_dispatch` |
+| Training trigger | `workflow_run` after a *successful* feature run, plus Monday 05:30 UTC | a failed feature run never retrains |
+
+Every pipeline step pipes through `tee` into the step summary and runs with
+`pipefail`, so a failed pipeline fails its run.
+
+**Hopsworks and W&B**
+
+- Hopsworks (serverless): writes go to offline DELTA groups, uploaded directly
+  rather than through Kafka. A long session can lose its TLS connection; reads
+  and writes log in again and retry three times (5, 20, 60 s). The client is
+  `hopsworks` 4.8, and the hosted backend reports 5.2, so the client logs a
+  version warning on every login.
+- W&B: one run per training and one model version per candidate; nothing in
+  this project comes near the free plan's limits.
 
 ---
 
