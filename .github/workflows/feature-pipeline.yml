@@ -84,3 +84,11 @@ jobs:
       - name: Incremental run
         if: inputs.backfill_start == '' || inputs.backfill_end == ''
         run: uv run padel feature-pipeline | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Data report
+        # Counts per season and tier and the baselines on the test split, read
+        # back from the store. A report problem must not block training.
+        continue-on-error: true
+        run: |
+          echo "## What is in the feature store" >> "$GITHUB_STEP_SUMMARY"
+          uv run padel data-report | tee -a "$GITHUB_STEP_SUMMARY"
