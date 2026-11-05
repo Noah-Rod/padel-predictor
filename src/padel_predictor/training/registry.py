@@ -149,6 +149,8 @@ class _WandbRun:
         self.run.summary.update({f"tag/{k}": v for k, v in tags.items()})
         if tags.get("promoted") == "True":
             self.run.tags = (*self.run.tags, "promoted")
+        if tags.get("data_plan"):
+            self.run.tags = (*self.run.tags, f"plan-{tags['data_plan']}")
 
     def log_model(self, model: Any, promote: bool, metadata: dict[str, Any]) -> ModelHandle:
         import wandb

@@ -211,6 +211,8 @@ def _track_and_promote(
                 "test_rows": len(split.x_test),
                 "train_end": str(split.train_end),
                 "test_start": str(split.test_start),
+                # Free- and paid-plan runs are kept side by side in W&B.
+                "data_plan": settings.api_plan,
             }
         )
         run.log_metrics({**metrics, **baselines})
@@ -221,6 +223,7 @@ def _track_and_promote(
                 "promoted": str(promote),
                 "promotion_reason": reason,
                 "beats_provider_elo": str(bool(baselines["beats_provider_elo"])),
+                "data_plan": settings.api_plan,
             }
         )
 
