@@ -228,13 +228,13 @@ not turned into fixtures; a resource outside the plan answers `402`.
 | --- | --- | --- | --- |
 | Daily feature run | about 25 | 5 to 6 min | ranking lists (16 requests), Hopsworks writes |
 | Free backfill, 6 months | 188 | 26 min | pacing at 9/min |
-| Paid backfill, one year | about 850 | about 60 min | weekly ranking snapshots (16 requests each) and Hopsworks writes of 30 s to 3.5 min per chunk |
+| Paid backfill, per year | about 1,100 | about 90 min | weekly ranking snapshots (16 requests each) and Hopsworks writes of 30 s to 3.5 min per chunk; Feb 2025 to Nov 2026 took 2,076 requests and 163 min over two runs |
 | Training run | 0 | about 1.5 min | dependency install, reading the features |
 
-A paid backfill back to 2023 needs about 3,000 requests: under the daily quota,
-but well over one workflow run. Run it in ranges of about a year; each chunk is
-upserted, so a range that stops part-way loses nothing and the next run
-continues from where it got to.
+Going back to 2023 adds about 2,200 requests and three hours. Run it in ranges
+of about a year: each then fits the 120-minute workflow limit and the 4,000
+daily requests. Each chunk is upserted, so a range that stops part-way loses
+nothing, and the next run continues from where it got to.
 
 **GitHub Actions**
 
