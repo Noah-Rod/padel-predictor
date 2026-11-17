@@ -34,6 +34,7 @@ from padel_predictor.training.dataset import (
     covered_comparison,
     provider_elo_probabilities,
     time_split,
+    unseen_by,
 )
 
 logger = get_logger(__name__)
@@ -51,6 +52,8 @@ class TrainingResult:
     model_version: str | None
     train_rows: int
     test_rows: int
+    #: Test matches the champion had not been trained on, which both were scored on.
+    comparison_rows: int | None = None
 
     def summary(self) -> str:
         return (
@@ -195,6 +198,82 @@ def run(
     return _track_and_promote(model, split, metrics, baselines, settings, config)
 
 
+@dataclass(frozen=True)
+class ChampionComparison:
+    """The candidate against the champion, on test matches neither was trained on."""
+
+    promote: bool
+    reason: str
+    rows: int
+    candidate_metrics: dict[str, float] | None = None
+    champion_metrics: dict[str, float] | None = None
+
+
+def compare_with_champion(
+    model: Any,
+    metrics: dict[str, float],
+    champion: registry.ModelHandle | None,
+    split: Split,
+    config: PipelineConfig,
+) -> ChampionComparison:
+    """Decide whether the candidate replaces the champion.
+
+    The test set is the newest fifth of the store, so a backfill of older history
+    moves it back in time, and a champion trained before the backfill may have
+    been fitted on matches that are now test matches. Both models are therefore
+    scored only on the test matches after the champion's ``train_end``
+    (:func:`~padel_predictor.training.dataset.unseen_by`); the candidate's own
+    metrics in the run stay on the whole test set.
+    """
+    promotion = config.training.promotion
+    rule = {
+        "metric": promotion.metric,
+        "higher_is_better": promotion.higher_is_better,
+        "min_improvement": promotion.min_improvement,
+    }
+    if champion is None:
+        promote, reason = registry.should_promote(candidate=metrics, champion=None, **rule)
+        return ChampionComparison(promote, reason, rows=len(split.y_test))
+
+    unseen = unseen_by(split, champion.train_end)
+    rows = int(unseen.sum())
+    if champion.train_end is None:
+        logger.warning(
+            "champion %s has no recorded training end; comparing on the whole test set, "
+            "which may include matches it was trained on",
+            champion.version,
+        )
+        scope = f"all {rows} test matches (champion {champion.version}'s training end unknown)"
+    else:
+        scope = (
+            f"{rows} test matches after champion {champion.version}'s "
+            f"training end {champion.train_end.date()}"
+        )
+
+    if rows < promotion.min_comparison_rows:
+        return ChampionComparison(
+            False,
+            f"no fair comparison: only {scope}, need {promotion.min_comparison_rows}",
+            rows=rows,
+        )
+
+    y = split.y_test.loc[unseen]
+    x = split.x_test.loc[unseen]
+    candidate_metrics = classification_metrics(y, model.predict_proba(x)[:, 1])
+    champion_metrics = classification_metrics(y, champion.model.predict_proba(x)[:, 1])
+    logger.info("on %s: candidate %s, champion %s", scope, candidate_metrics, champion_metrics)
+    promote, reason = registry.should_promote(
+        candidate=candidate_metrics, champion=champion_metrics, **rule
+    )
+    return ChampionComparison(
+        promote,
+        f"{reason} on {scope}",
+        rows=rows,
+        candidate_metrics=candidate_metrics,
+        champion_metrics=champion_metrics,
+    )
+
+
 def _track_and_promote(
     model: Pipeline,
     split: Split,
@@ -204,20 +283,10 @@ def _track_and_promote(
     config: PipelineConfig,
 ) -> TrainingResult:
     """Log the run and promote the candidate if it beats the champion."""
-    promotion = config.training.promotion
-
     champion = registry.load_champion(settings)
-    champion_metrics = evaluate(champion.model, split) if champion else None
-    if champion_metrics:
-        logger.info("champion version %s scores %s", champion.version, champion_metrics)
-
-    promote, reason = registry.should_promote(
-        candidate=metrics,
-        champion=champion_metrics,
-        metric=promotion.metric,
-        higher_is_better=promotion.higher_is_better,
-        min_improvement=promotion.min_improvement,
-    )
+    comparison = compare_with_champion(model, metrics, champion, split, config)
+    promote, reason = comparison.promote, comparison.reason
+    champion_metrics = comparison.champion_metrics
 
     with registry.start_run(settings, name="training") as run:
         run.log_params(
@@ -234,9 +303,13 @@ def _track_and_promote(
                 "data_plan": settings.api_plan,
             }
         )
-        run.log_metrics({**metrics, **baselines})
-        if champion_metrics:
+        run.log_metrics({**metrics, **baselines, "comparison_rows": comparison.rows})
+        if champion_metrics and comparison.candidate_metrics:
+            # Both on the same test matches: those the champion was not trained on.
             run.log_metrics({f"champion_{k}": v for k, v in champion_metrics.items()})
+            run.log_metrics(
+                {f"comparison_candidate_{k}": v for k, v in comparison.candidate_metrics.items()}
+            )
         run.set_tags(
             {
                 "promoted": str(promote),
@@ -251,7 +324,10 @@ def _track_and_promote(
 
         # Every candidate is versioned; only a promoted one gets the champion alias.
         handle = run.log_model(
-            model, promote=promote, metadata={**metrics, "promotion_reason": reason}
+            model,
+            promote=promote,
+            # train_end lets a later run score this model only on matches it never saw.
+            metadata={**metrics, "promotion_reason": reason, "train_end": str(split.train_end)},
         )
         version: str | None = (
             handle.version if promote else (champion.version if champion else None)
@@ -269,6 +345,7 @@ def _track_and_promote(
         model_version=version,
         train_rows=len(split.x_train),
         test_rows=len(split.x_test),
+        comparison_rows=comparison.rows,
     )
     logger.info("training pipeline done | %s", result.summary())
     return result

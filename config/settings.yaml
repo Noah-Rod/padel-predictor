@@ -62,6 +62,10 @@ training:
     metric: log_loss
     higher_is_better: false
     min_improvement: 0.002
+    # Both are scored only on test matches played after the champion's last
+    # training match (the test window moves back when history is backfilled).
+    # With fewer than this many such matches, nothing is promoted.
+    min_comparison_rows: 100
   evaluation:
     # Success criterion: the model beats the provider-Elo baseline only if the
     # whole bootstrap confidence interval of the log-loss difference

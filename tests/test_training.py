@@ -293,3 +293,152 @@ def test_the_covered_comparison_is_empty_without_any_provider_rating():
     out = covered_comparison(np.array([0, 1]), np.array([0.4, 0.6]), np.full(2, np.nan))
     assert out["covered_rows"] == 0
     assert out["covered_beats_provider_elo"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# The champion is scored only on test matches it was not trained on
+# --------------------------------------------------------------------------- #
+class Memoriser:
+    """A champion that remembers the outcome of every match it was trained on.
+
+    It is useless on new matches (0.5) but near-perfect on the ones it saw, so
+    scoring it on its own training matches makes it look better than any
+    honest model -- exactly what a backfill that moves the test window does.
+    """
+
+    def __init__(self, x, y) -> None:
+        self.known = {tuple(row): int(label) for row, label in zip(x.to_numpy(), y, strict=True)}
+
+    def predict_proba(self, x):
+        p = np.array(
+            [{1: 0.999, 0: 0.001}.get(self.known.get(tuple(row)), 0.5) for row in x.to_numpy()]
+        )
+        return np.column_stack([1 - p, p])
+
+
+def _register_champion(settings, model, train_end, *, in_metadata: bool = True):
+    with registry.start_run(settings) as run:
+        if not in_metadata:
+            # How models logged before train_end was artifact metadata record it.
+            run.log_params({"train_end": str(train_end)})
+        metadata = {"train_end": str(train_end)} if in_metadata else {}
+        return run.log_model(model, promote=True, metadata=metadata)
+
+
+@pytest.fixture
+def small_window_config(config):
+    """The synthetic test set has 180 matches; allow comparisons on a part of it."""
+    config = config.model_copy(deep=True)
+    config.training.promotion.min_comparison_rows = 20
+    return config
+
+
+def test_unseen_rows_start_after_the_champions_training_end(features):
+    from padel_predictor.training.dataset import unseen_by
+
+    split = time_split(features, 0.2)
+    meta = split.meta_test
+    end = meta["played_at"].iloc[len(meta) // 2]
+
+    unseen = unseen_by(split, end)
+
+    assert 0 < unseen.sum() < len(meta)
+    assert (meta.loc[unseen, "played_at"] > end).all()
+    # A tournament the champion saw part of is left out entirely, as in the split.
+    seen_tournaments = set(meta.loc[meta["played_at"] <= end, "tournament"])
+    assert not seen_tournaments & set(meta.loc[unseen, "tournament"])
+
+
+def test_every_test_row_is_unseen_by_a_model_trained_before_the_split(features):
+    from padel_predictor.training.dataset import unseen_by
+
+    split = time_split(features, 0.2)
+    assert unseen_by(split, split.train_end).all()
+    assert unseen_by(split, None).all()
+
+
+def test_a_champion_is_not_scored_on_matches_it_was_trained_on(
+    settings, small_window_config, features
+):
+    from padel_predictor.common import storage
+    from padel_predictor.common.features import FEATURE_COLUMNS, labelled
+    from padel_predictor.training.dataset import unseen_by
+
+    config = small_window_config
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    split = time_split(features, config.training.test_fraction)
+    end = split.meta_test["played_at"].iloc[len(split.meta_test) // 2]
+
+    # The champion was trained up to the middle of today's test window.
+    seen = labelled(features).loc[lambda f: f["played_at"] <= end]
+    memoriser = Memoriser(seen[list(FEATURE_COLUMNS)], seen["team_a_won"].astype(int))
+    _register_champion(settings, memoriser, end)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    # On the whole test set its memory would have kept it in place ...
+    on_everything = classification_metrics(
+        split.y_test, memoriser.predict_proba(split.x_test)[:, 1]
+    )
+    assert on_everything["log_loss"] < result.metrics["log_loss"]
+    # ... scored only on matches it never saw, the trained candidate replaces it.
+    assert result.comparison_rows == int(unseen_by(split, end).sum())
+    assert result.promoted
+    assert "after champion v1's training end" in result.reason
+
+
+def test_nothing_is_promoted_without_test_matches_the_champion_has_not_seen(
+    settings, small_window_config, features
+):
+    from padel_predictor.common import storage
+    from padel_predictor.common.features import FEATURE_COLUMNS, labelled
+
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    every = labelled(features)
+    memoriser = Memoriser(every[list(FEATURE_COLUMNS)], every["team_a_won"].astype(int))
+    _register_champion(settings, memoriser, every["played_at"].max())
+
+    result = pipeline.run(settings=settings, config=small_window_config, register=True)
+
+    assert result.comparison_rows == 0
+    assert not result.promoted
+    assert "no fair comparison" in result.reason
+    assert result.model_version == "v1"
+
+
+def test_a_trained_model_records_its_training_end(settings, config, features):
+    from padel_predictor.common import storage
+
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    pipeline.run(settings=settings, config=config, register=True)
+
+    champion = registry.load_champion(settings)
+    assert champion.train_end == time_split(features, config.training.test_fraction).train_end
+
+
+def test_an_older_champion_falls_back_to_its_runs_training_end(settings):
+    from sklearn.dummy import DummyClassifier
+
+    model = DummyClassifier().fit(np.zeros((2, 1)), [0, 1])
+    _register_champion(settings, model, "2026-06-28 00:00:00+00:00", in_metadata=False)
+
+    champion = registry.load_champion(settings)
+    assert champion.train_end == registry.parse_train_end("2026-06-28T00:00:00Z")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-06-28 00:00:00+00:00", "2026-06-28T00:00:00Z"),
+        ("2026-06-28", "2026-06-28T00:00:00Z"),
+        ({"value": "2026-06-28T10:00:00+02:00"}, "2026-06-28T08:00:00Z"),
+        (None, None),
+        ("", None),
+        ("not a date", None),
+    ],
+)
+def test_parse_train_end_reads_every_recorded_form(value, expected):
+    import pandas as pd
+
+    parsed = registry.parse_train_end(value)
+    assert parsed == (pd.Timestamp(expected) if expected else None)

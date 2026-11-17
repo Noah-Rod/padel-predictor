@@ -141,6 +141,9 @@ class PromotionConfig(BaseModel):
     metric: str = "log_loss"
     higher_is_better: bool = False
     min_improvement: float = 0.002
+    # The champion is only scored on test matches it was not trained on; with
+    # fewer than this many, there is no fair comparison and nothing is promoted.
+    min_comparison_rows: int = 100
 
 
 class EvaluationConfig(BaseModel):

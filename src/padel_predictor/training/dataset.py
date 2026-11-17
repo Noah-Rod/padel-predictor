@@ -83,6 +83,32 @@ def _tournament_boundary(data: pd.DataFrame, cutoff: int) -> int:
     return best if 0 < best < len(data) else cutoff
 
 
+def unseen_by(split: Split, train_end: pd.Timestamp | None) -> np.ndarray:
+    """Mask of the test rows a model trained up to ``train_end`` has never seen.
+
+    The test set is the newest share of the store, so it moves whenever older
+    history is backfilled: a champion trained before the backfill may have been
+    fitted on matches that are test matches now. Scoring it on those would
+    flatter it and block a fairly evaluated candidate.
+
+    A row counts as unseen when it was played strictly after ``train_end`` and
+    its tournament has no match on or before it, the same rule the split uses
+    for train and test. ``None`` (training end not recorded) keeps every row.
+    """
+    keep = np.ones(len(split.y_test), dtype=bool)
+    meta = split.meta_test
+    if train_end is None or pd.isna(train_end) or "played_at" not in meta.columns:
+        return keep
+    end = pd.Timestamp(train_end)
+    end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+    seen = (pd.to_datetime(meta["played_at"], utc=True) <= end).to_numpy()
+    if "tournament" in meta.columns:
+        names = meta["tournament"].astype("string").fillna("")
+        touched = set(names[seen]) - {""}
+        seen = seen | names.isin(touched).to_numpy()
+    return keep & ~seen
+
+
 def classification_metrics(y_true: pd.Series, proba: np.ndarray) -> dict[str, float]:
     """Metrics for a binary probabilistic classifier.
 
