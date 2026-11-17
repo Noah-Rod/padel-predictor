@@ -15,6 +15,11 @@ chosen by ``PADEL_TRACKING``:
 
 Models are addressed by *alias* (``champion``), so the inference pipeline asks
 for "the best model" and never hard-codes a version.
+
+Every model also records ``train_end``, the last match it was trained on. The
+test window moves whenever history is backfilled, so a champion trained months
+ago can have seen matches that are in today's test set; the training pipeline
+uses ``train_end`` to score the champion only on matches it has never seen.
 """
 
 from __future__ import annotations
@@ -47,10 +52,28 @@ class ModelHandle:
     version: str
     alias: str
     run_id: str | None = None
+    #: The last match the model was trained on; ``None`` when it was not recorded.
+    train_end: pd.Timestamp | None = None
 
     @property
     def uri(self) -> str:
         return f"{self.name}:{self.version}"
+
+
+def parse_train_end(value: Any) -> pd.Timestamp | None:
+    """Read a recorded training end back as a UTC timestamp, or ``None``."""
+    if isinstance(value, dict):  # W&B configs can wrap values as {"value": ...}
+        value = value.get("value")
+    if value is None or value == "":
+        return None
+    try:
+        stamp = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        logger.warning("could not read train_end %r", value)
+        return None
+    if pd.isna(stamp):
+        return None
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
 
 
 class TrainingRun(Protocol):
@@ -195,12 +218,18 @@ def _wandb_load(settings: Settings) -> ModelHandle | None:
     with tempfile.TemporaryDirectory() as tmp:
         model = joblib.load(Path(artifact.download(root=tmp)) / MODEL_FILENAME)
     producer = artifact.logged_by()
+    # Models logged before train_end was part of the artifact metadata still
+    # have it in the config of the run that trained them.
+    train_end = (artifact.metadata or {}).get("train_end")
+    if train_end is None and producer is not None:
+        train_end = (producer.config or {}).get("train_end")
     return ModelHandle(
         model=model,
         name=settings.registered_model_name,
         version=str(artifact.version),
         alias=settings.model_alias,
         run_id=producer.id if producer is not None else None,
+        train_end=parse_train_end(train_end),
     )
 
 
@@ -277,10 +306,15 @@ def _local_load(settings: Settings) -> ModelHandle | None:
     if version is None:
         return None
     metadata = json.loads((model_dir / version / "metadata.json").read_text())
+    train_end = metadata.get("train_end")
+    run_file = Path(settings.local_registry_dir) / "runs" / f"{metadata.get('run_id')}.json"
+    if train_end is None and run_file.is_file():
+        train_end = json.loads(run_file.read_text()).get("params", {}).get("train_end")
     return ModelHandle(
         model=joblib.load(model_dir / version / MODEL_FILENAME),
         name=settings.registered_model_name,
         version=version,
         alias=settings.model_alias,
         run_id=metadata.get("run_id"),
+        train_end=parse_train_end(train_end),
     )

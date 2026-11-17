@@ -89,6 +89,14 @@ A few design decisions carry most of the weight:
   time fall back to midnight of the day played, so several rounds of one event
   can share a timestamp. Ties are broken by round, so a quarter-final is never
   replayed before that day's round of 16 and cannot leak into it.
+- **The champion is judged on matches it has never seen.** The test set is the
+  newest fifth of the store, so backfilling older history moves it back in time,
+  and the current champion may have been trained on matches that are now test
+  matches. Every model records the last match it was trained on (`train_end`),
+  and the candidate and the champion are both scored only on test matches after
+  it, leaving out any tournament the champion saw part of. With fewer than 100
+  such matches nothing is promoted. A unit test registers a champion that has
+  memorised half the test window and checks it does not block a better candidate.
 
 ---
 
