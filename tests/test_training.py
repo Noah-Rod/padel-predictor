@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -442,3 +443,74 @@ def test_parse_train_end_reads_every_recorded_form(value, expected):
 
     parsed = registry.parse_train_end(value)
     assert parsed == (pd.Timestamp(expected) if expected else None)
+
+
+# --------------------------------------------------------------------------- #
+# The provider's Elo is the first champion
+# --------------------------------------------------------------------------- #
+def test_the_provider_elo_model_reads_only_its_baseline_column():
+    import pandas as pd
+
+    from padel_predictor.common.features import FEATURE_COLUMNS, model_inputs
+    from padel_predictor.training.baseline import ProviderEloModel
+
+    frame = pd.DataFrame(
+        {**{c: [9.0, 9.0] for c in FEATURE_COLUMNS}, "provider_elo_prob": [0.8, float("nan")]}
+    )
+    model = ProviderEloModel()
+
+    assert list(model_inputs(model, frame).columns) == ["provider_elo_prob"]
+    assert model.predict_proba(model_inputs(model, frame))[:, 1].tolist() == [0.8, 0.5]
+    assert list(model_inputs(object(), frame).columns) == list(FEATURE_COLUMNS)
+
+
+def test_an_empty_registry_starts_with_the_provider_elo_as_champion(settings, config, features):
+    import joblib
+
+    from padel_predictor.common import storage
+    from padel_predictor.training.baseline import ProviderEloModel
+
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    first = Path(settings.local_registry_dir) / settings.registered_model_name / "v1"
+    assert isinstance(joblib.load(first / "model.joblib"), ProviderEloModel)
+    # The provider is scored on every test match, exactly as its baseline is.
+    assert result.comparison_rows == result.test_rows
+    assert "is the provider's Elo" in result.reason
+    assert result.champion_metrics["log_loss"] == pytest.approx(
+        result.baselines["baseline_provider_elo_log_loss"]
+    )
+
+
+def test_a_model_that_does_not_beat_the_provider_is_not_served(settings, config, features):
+    from padel_predictor.common import storage
+    from padel_predictor.inference.predict import Predictor
+    from padel_predictor.training.baseline import ProviderEloModel
+
+    # A provider that is nearly always right cannot be beaten.
+    won = features["team_a_won"].astype("float64")
+    features = features.assign(provider_elo_prob=0.05 + 0.9 * won)
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    assert not result.promoted
+    predictor = Predictor.load(settings, config)
+    assert isinstance(predictor.handle.model, ProviderEloModel)
+    upcoming = features.head(3).assign(provider_elo_prob=[0.7, 0.2, float("nan")])
+    assert predictor.probabilities(upcoming).tolist() == [0.7, 0.2, 0.5]
+
+
+def test_without_the_provider_first_the_first_trained_model_is_promoted(settings, config, features):
+    from padel_predictor.common import storage
+
+    config = config.model_copy(deep=True)
+    config.training.promotion.provider_elo_first_champion = False
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    assert result.promoted
+    assert result.model_version == "v1"
+    assert "no champion registered yet" in result.reason

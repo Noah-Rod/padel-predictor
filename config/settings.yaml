@@ -72,6 +72,9 @@ training:
     # training match (the test window moves back when history is backfilled).
     # With fewer than this many such matches, nothing is promoted.
     min_comparison_rows: 100
+    # An empty registry first registers the provider's Elo as champion, so a
+    # trained model is only served once it beats the provider by min_improvement.
+    provider_elo_first_champion: true
   evaluation:
     # Success criterion: the model beats the provider-Elo baseline only if the
     # whole bootstrap confidence interval of the log-loss difference

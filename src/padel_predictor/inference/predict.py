@@ -24,8 +24,8 @@ from padel_predictor.common.config import (
     get_settings,
 )
 from padel_predictor.common.features import (
-    FEATURE_COLUMNS,
     build_feature_frame,
+    model_inputs,
     unlabelled,
 )
 from padel_predictor.common.logging import get_logger
@@ -121,7 +121,7 @@ class Predictor:
         """Probability that team A wins, for pre-built feature rows."""
         if features.empty:
             return pd.Series(dtype="float64")
-        proba = self.handle.model.predict_proba(features[list(FEATURE_COLUMNS)])[:, 1]
+        proba = self.handle.model.predict_proba(model_inputs(self.handle.model, features))[:, 1]
         return pd.Series(proba, index=features.index, name="probability_team_a")
 
     def predict_frame(self, features: pd.DataFrame) -> pd.DataFrame:

@@ -149,6 +149,9 @@ class PromotionConfig(BaseModel):
     # The champion is only scored on test matches it was not trained on; with
     # fewer than this many, there is no fair comparison and nothing is promoted.
     min_comparison_rows: int = 100
+    # An empty registry gets the provider's Elo as its first champion, so a
+    # trained model is only served once it beats the provider.
+    provider_elo_first_champion: bool = True
 
 
 class EvaluationConfig(BaseModel):

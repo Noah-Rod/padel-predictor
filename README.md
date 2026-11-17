@@ -97,6 +97,13 @@ A few design decisions carry most of the weight:
   it, leaving out any tournament the champion saw part of. With fewer than 100
   such matches nothing is promoted. A unit test registers a champion that has
   memorised half the test window and checks it does not block a better candidate.
+- **The provider's Elo is the first champion.** An empty registry does not
+  promote the first trained model by default: the training pipeline first
+  registers the provider's Elo as a model (`training/baseline.py`, reading
+  `provider_elo_prob`, 0.5 where the provider has no rating) and makes it the
+  champion. A trained model is served only once it beats it on the same test
+  matches by `min_improvement`, like any later candidate.
+  `training.promotion.provider_elo_first_champion: false` turns this off.
 
 ---
 
