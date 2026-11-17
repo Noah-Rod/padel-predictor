@@ -159,6 +159,13 @@ class EvaluationConfig(BaseModel):
     confidence: float = 0.95
 
 
+class AblationConfig(BaseModel):
+    # Features dropped one at a time by `padel ablation`.
+    drop: list[str] = Field(
+        default_factory=lambda: ["partnership_diff", "form_diff", "rest_days_diff"]
+    )
+
+
 class TrainingConfig(BaseModel):
     test_fraction: float = 0.2
     min_training_rows: int = 200
@@ -166,6 +173,7 @@ class TrainingConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     promotion: PromotionConfig = Field(default_factory=PromotionConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    ablation: AblationConfig = Field(default_factory=AblationConfig)
 
 
 class InferenceConfig(BaseModel):

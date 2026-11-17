@@ -81,6 +81,10 @@ training:
     # (model minus baseline, paired over the same test matches) is below zero.
     bootstrap_samples: 2000
     confidence: 0.95
+  ablation:
+    # `padel ablation` retrains without each of these features in turn, on the
+    # same split, and reports each against the provider's Elo and the full model.
+    drop: [partnership_diff, form_diff, rest_days_diff]
 
 inference:
   # How far ahead the batch inference pipeline looks for unplayed matches.

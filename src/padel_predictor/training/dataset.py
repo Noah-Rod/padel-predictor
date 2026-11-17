@@ -7,6 +7,7 @@ and is the single easiest way to fool yourself in this kind of project.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -81,6 +82,16 @@ def _tournament_boundary(data: pd.DataFrame, cutoff: int) -> int:
         return cutoff
     best = min(boundaries, key=lambda i: (abs(i - cutoff), i))
     return best if 0 < best < len(data) else cutoff
+
+
+def with_features(split: Split, columns: tuple[str, ...]) -> Split:
+    """The same split with only ``columns`` as model inputs (for ablations)."""
+    unknown = sorted(set(columns) - set(split.x_train.columns))
+    if unknown:
+        raise ValueError(f"not model features: {unknown}; expected some of {FEATURE_COLUMNS}")
+    return dataclasses.replace(
+        split, x_train=split.x_train[list(columns)], x_test=split.x_test[list(columns)]
+    )
 
 
 def unseen_by(split: Split, train_end: pd.Timestamp | None) -> np.ndarray:

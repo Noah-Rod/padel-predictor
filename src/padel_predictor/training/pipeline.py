@@ -111,6 +111,27 @@ def load_training_features(settings: Settings) -> pd.DataFrame:
     return features
 
 
+def load_split(settings: Settings, config: PipelineConfig) -> Split:
+    """The chronological train/test split of the newest feature snapshot."""
+    features = load_training_features(settings)
+    rows = len(labelled(features))
+    if rows < config.training.min_training_rows:
+        raise RuntimeError(
+            f"only {rows} labelled matches in the feature store, "
+            f"need at least {config.training.min_training_rows}; backfill more history"
+        )
+
+    split = time_split(features, config.training.test_fraction)
+    logger.info(
+        "training on %d matches up to %s, testing on %d from %s",
+        len(split.x_train),
+        split.train_end.date(),
+        len(split.x_test),
+        split.test_start.date(),
+    )
+    return split
+
+
 def evaluate(model: Any, split: Split) -> dict[str, float]:
     """Score a fitted model on the holdout."""
     proba = model.predict_proba(split.x_test)[:, 1]
@@ -161,23 +182,7 @@ def run(
     """
     settings = settings or get_settings()
     config = config or get_pipeline_config()
-
-    features = load_training_features(settings)
-    rows = len(labelled(features))
-    if rows < config.training.min_training_rows:
-        raise RuntimeError(
-            f"only {rows} labelled matches in the feature store, "
-            f"need at least {config.training.min_training_rows}; backfill more history"
-        )
-
-    split = time_split(features, config.training.test_fraction)
-    logger.info(
-        "training on %d matches up to %s, testing on %d from %s",
-        len(split.x_train),
-        split.train_end.date(),
-        len(split.x_test),
-        split.test_start.date(),
-    )
+    split = load_split(settings, config)
 
     model = build_model(config)
     model.fit(split.x_train, split.y_train)
