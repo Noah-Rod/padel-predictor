@@ -7,6 +7,7 @@ developer all start the same code the same way::
     padel backfill --start 2026-01-01 --end 2026-09-01
     padel data-report
     padel training-pipeline
+    padel ablation
     padel inference-pipeline
     padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 04"
     padel serve
@@ -93,6 +94,18 @@ def training_pipeline(
 
     result = pipeline.run(register=register)
     typer.echo(result.summary())
+
+
+@app.command("ablation")
+def ablation(
+    track: bool = typer.Option(
+        True, "--track/--no-track", help="Log every variant as a run (never as a model)."
+    ),
+) -> None:
+    """Retrain without each feature in training.ablation.drop and compare the variants."""
+    from padel_predictor.training import ablation as ablation_runs
+
+    typer.echo(ablation_runs.run(track=track).to_markdown())
 
 
 @app.command("inference-pipeline")

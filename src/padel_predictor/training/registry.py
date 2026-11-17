@@ -98,11 +98,19 @@ def _backend(settings: Settings) -> str:
 
 
 @contextmanager
-def start_run(settings: Settings | None = None, name: str = "training"):
-    """Open a tracked run; it is closed (and flushed) when the block exits."""
+def start_run(
+    settings: Settings | None = None, name: str = "training", job_type: str | None = None
+):
+    """Open a tracked run; it is closed (and flushed) when the block exits.
+
+    ``job_type`` groups runs in W&B (``training``, ``ablation``); it defaults
+    to the run's name.
+    """
     settings = settings or get_settings()
     run: _WandbRun | _LocalRun = (
-        _WandbRun(settings, name) if _backend(settings) == "wandb" else _LocalRun(settings, name)
+        _WandbRun(settings, name, job_type or name)
+        if _backend(settings) == "wandb"
+        else _LocalRun(settings, name)
     )
     try:
         yield run
@@ -161,14 +169,14 @@ def _wandb_path(settings: Settings, api: Any, alias: str) -> str:
 
 
 class _WandbRun:
-    def __init__(self, settings: Settings, name: str) -> None:
+    def __init__(self, settings: Settings, name: str, job_type: str) -> None:
         import wandb
 
         self.settings = settings
         self.run = wandb.init(
             project=settings.wandb_project,
             entity=settings.wandb_entity or None,
-            job_type=name,
+            job_type=job_type,
             name=name,
         )
         self.run_id = self.run.id
@@ -184,6 +192,8 @@ class _WandbRun:
         self.run.summary.update({f"tag/{k}": v for k, v in tags.items()})
         if tags.get("promoted") == "True":
             self.run.tags = (*self.run.tags, "promoted")
+        if tags.get("ablation") == "True":
+            self.run.tags = (*self.run.tags, "ablation")
         if tags.get("data_plan"):
             self.run.tags = (*self.run.tags, f"plan-{tags['data_plan']}")
 
