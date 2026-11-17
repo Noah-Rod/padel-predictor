@@ -340,6 +340,17 @@ def build_feature_frame(
     return features
 
 
+def model_inputs(model: object, features: pd.DataFrame) -> pd.DataFrame:
+    """The columns of a feature frame that ``model`` reads.
+
+    :data:`FEATURE_COLUMNS` for every trained model. A model that reads other
+    columns declares them as ``input_columns``: the provider-Elo baseline
+    (:class:`padel_predictor.training.baseline.ProviderEloModel`) reads only
+    ``provider_elo_prob``, which is never a feature of a trained model.
+    """
+    return features[list(getattr(model, "input_columns", FEATURE_COLUMNS))]
+
+
 def labelled(features: pd.DataFrame) -> pd.DataFrame:
     """Rows with a known outcome -- the training pipeline's input."""
     return features.loc[features[TARGET_COLUMN].notna()].reset_index(drop=True)

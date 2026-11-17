@@ -23,9 +23,10 @@ from padel_predictor.common.config import (
     get_pipeline_config,
     get_settings,
 )
-from padel_predictor.common.features import FEATURE_COLUMNS, labelled
+from padel_predictor.common.features import FEATURE_COLUMNS, labelled, model_inputs
 from padel_predictor.common.logging import get_logger
 from padel_predictor.training import registry
+from padel_predictor.training.baseline import PROVIDER_ELO_RUN_NAME, ProviderEloModel
 from padel_predictor.training.dataset import (
     Split,
     baseline_metrics,
@@ -237,7 +238,9 @@ def compare_with_champion(
 
     unseen = unseen_by(split, champion.train_end)
     rows = int(unseen.sum())
-    if champion.train_end is None:
+    if not getattr(champion.model, "trained_on_matches", True):
+        scope = f"all {rows} test matches (champion {champion.version} is the provider's Elo)"
+    elif champion.train_end is None:
         logger.warning(
             "champion %s has no recorded training end; comparing on the whole test set, "
             "which may include matches it was trained on",
@@ -258,9 +261,14 @@ def compare_with_champion(
         )
 
     y = split.y_test.loc[unseen]
-    x = split.x_test.loc[unseen]
-    candidate_metrics = classification_metrics(y, model.predict_proba(x)[:, 1])
-    champion_metrics = classification_metrics(y, champion.model.predict_proba(x)[:, 1])
+    # The whole test rows: the provider-Elo champion reads a baseline column.
+    rows_frame = split.meta_test.loc[unseen]
+    candidate_metrics = classification_metrics(
+        y, model.predict_proba(model_inputs(model, rows_frame))[:, 1]
+    )
+    champion_metrics = classification_metrics(
+        y, champion.model.predict_proba(model_inputs(champion.model, rows_frame))[:, 1]
+    )
     logger.info("on %s: candidate %s, champion %s", scope, candidate_metrics, champion_metrics)
     promote, reason = registry.should_promote(
         candidate=candidate_metrics, champion=champion_metrics, **rule
@@ -284,6 +292,14 @@ def _track_and_promote(
 ) -> TrainingResult:
     """Log the run and promote the candidate if it beats the champion."""
     champion = registry.load_champion(settings)
+    if champion is None and config.training.promotion.provider_elo_first_champion:
+        # A trained model is served only once it beats the provider's own Elo.
+        champion = registry.register_first_champion(
+            settings,
+            ProviderEloModel(),
+            run_name=PROVIDER_ELO_RUN_NAME,
+            params={"model": "provider_elo", "data_plan": settings.api_plan},
+        )
     comparison = compare_with_champion(model, metrics, champion, split, config)
     promote, reason = comparison.promote, comparison.reason
     champion_metrics = comparison.champion_metrics

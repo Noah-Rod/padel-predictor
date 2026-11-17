@@ -118,6 +118,18 @@ def load_champion(settings: Settings | None = None) -> ModelHandle | None:
     return _local_load(settings)
 
 
+def register_first_champion(
+    settings: Settings, model: Any, run_name: str, params: dict[str, Any]
+) -> ModelHandle:
+    """Log an untrained model (the provider's Elo) as the champion of an empty registry."""
+    with start_run(settings, name=run_name) as run:
+        run.log_params(params)
+        run.set_tags({"promoted": "True", "promotion_reason": "first champion"})
+        handle = run.log_model(model, promote=True, metadata={"promotion_reason": "first champion"})
+    logger.info("registered %s as the first champion (%s)", run_name, handle.uri)
+    return handle
+
+
 def should_promote(
     candidate: dict[str, float],
     champion: dict[str, float] | None,
