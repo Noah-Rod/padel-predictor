@@ -24,6 +24,12 @@ ingestion:
     paid: 55
   # Pages of 50 per ranking list (official points, Elo), category and week: top 200.
   rankings_max_pages: 4
+  # Paid plan: a player of the fetched matches who is missing from those lists is
+  # read from /players/{id}/rankings instead -- one request returns their weekly
+  # official points and Elo for the whole window. Far cheaper than paging through
+  # the full lists every week; capped per window.
+  rankings_fill_missing_players: true
+  rankings_max_player_requests: 400
   # A 429 asking to wait longer than this means the daily quota is used up.
   max_retry_after_seconds: 120
 

@@ -118,6 +118,11 @@ class IngestionConfig(BaseModel):
     requests_per_minute: dict[str, int] = Field(default_factory=lambda: {"free": 9, "paid": 55})
     # Pages of 50 read per ranking list, category and week (4 = top 200).
     rankings_max_pages: int = 4
+    # Paid plan: read each player of the fetched matches who is missing from
+    # those lists on their own (one request per player and window), at most
+    # this many players per window.
+    rankings_fill_missing_players: bool = True
+    rankings_max_player_requests: int = 400
     # A longer Retry-After than this means the daily quota is gone: stop.
     max_retry_after_seconds: float = 120.0
 

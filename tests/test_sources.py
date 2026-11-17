@@ -216,10 +216,19 @@ def test_hidden_ranking_values_become_missing_and_race_is_ignored():
 class FakePadelApi:
     """Serves /tournaments, /tournaments/{id}/matches and /rankings in pages."""
 
-    def __init__(self, pages_of_matches: int = 2, fail_first: dict | None = None):
+    #: The players of every fake match, by provider id (see :func:`_match`).
+    PLAYERS = {1: "Alex Uno", 2: "Bea Dos", 3: "Carlos Tres", 4: "Dani Cuatro"}
+
+    def __init__(
+        self,
+        pages_of_matches: int = 2,
+        fail_first: dict | None = None,
+        unknown_players: frozenset[int] = frozenset(),
+    ):
         self.requests: list[httpx.Request] = []
         self.pages_of_matches = pages_of_matches
         self.fail_first = dict(fail_first or {})
+        self.unknown_players = unknown_players
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -240,6 +249,20 @@ class FakePadelApi:
             return self._page(
                 [_ranking(f"P {params['category']}", params["type"], points, date)], 9
             )
+        if path.startswith("/api/players/") and path.endswith("/rankings"):
+            pid = int(path.split("/")[3])
+            if pid in self.unknown_players:
+                return httpx.Response(404, json={"message": "Not found."})
+            name = self.PLAYERS[pid]
+            # A bare array, as the spec describes it, with a type the pipeline ignores.
+            return httpx.Response(
+                200,
+                json=[
+                    _ranking(name, "official", 300 + pid, "2026-03-02"),
+                    _ranking(name, "elo", 1400 + pid, "2026-03-02"),
+                    _ranking(name, "race", 10, "2026-03-02"),
+                ],
+            )
         return httpx.Response(404, json={"message": "Not found."})
 
     @staticmethod
@@ -249,14 +272,16 @@ class FakePadelApi:
         )
 
 
-def _source(monkeypatch, api: FakePadelApi, plan: str = "paid", sleeps: list | None = None):
+def _source(
+    monkeypatch, api: FakePadelApi, plan: str = "paid", sleeps: list | None = None, **ingestion
+):
     monkeypatch.setenv("PADEL_API_BASE_URL", "https://padelapi.test/api")
     monkeypatch.setenv("PADEL_API_KEY", "token-123")
     monkeypatch.setenv("PADEL_API_PLAN", plan)
     clock = iter(range(0, 10_000, 1))  # one second passes between requests
     return HttpMatchSource(
         Settings(),
-        IngestionConfig(requests_per_minute={"free": 10, "paid": 60}),
+        IngestionConfig(requests_per_minute={"free": 10, "paid": 60}, **ingestion),
         transport=httpx.MockTransport(api),
         sleep=(sleeps.append if sleeps is not None else lambda _: None),
         clock=lambda: float(next(clock)),
@@ -330,6 +355,62 @@ def test_free_rankings_are_the_latest_snapshot_published_now(monkeypatch):
     )
     assert all("date" not in r.url.params for r in api.requests)
     assert (out["published_at"] >= before).all()
+
+
+def _player_requests(api: FakePadelApi) -> list[httpx.Request]:
+    return [r for r in api.requests if r.url.path.startswith("/api/players/")]
+
+
+def test_players_missing_from_the_lists_are_read_on_their_own(monkeypatch):
+    api = FakePadelApi()
+    source = _source(monkeypatch, api)
+    source.fetch(dt.date(2026, 3, 1), dt.date(2026, 3, 31))
+
+    out = source.fetch_rankings(dt.date(2026, 3, 1), dt.date(2026, 3, 10))
+
+    # The fake lists only hold "P men" and "P women": all four players are missing.
+    requests = _player_requests(api)
+    assert sorted(r.url.path for r in requests) == [
+        f"/api/players/{pid}/rankings" for pid in (1, 2, 3, 4)
+    ]
+    assert {(r.url.params["after_date"], r.url.params["before_date"]) for r in requests} == {
+        ("2026-03-01", "2026-03-10")
+    }
+    alex = out.set_index("player").loc["Alex Uno"]
+    assert (alex["rank_points"], alex["provider_elo"]) == (301, 1401)
+    assert alex["published_at"] == pd.Timestamp("2026-03-09", tz="UTC")  # label + 7 days
+
+
+def test_a_player_on_both_lists_is_not_read_again(monkeypatch):
+    api = FakePadelApi()
+    source = _source(monkeypatch, api)
+    source.player_ids = {"P men": 99, "Alex Uno": 1}
+
+    source.fetch_rankings(dt.date(2026, 3, 1), dt.date(2026, 3, 10))
+
+    assert [r.url.path for r in _player_requests(api)] == ["/api/players/1/rankings"]
+
+
+def test_player_reads_are_capped_and_a_player_without_rankings_is_skipped(monkeypatch):
+    api = FakePadelApi(unknown_players=frozenset({1}))
+    source = _source(monkeypatch, api, rankings_max_player_requests=2)
+    source.player_ids = dict(map(reversed, FakePadelApi.PLAYERS.items()))
+
+    out = source.fetch_rankings(dt.date(2026, 3, 1), dt.date(2026, 3, 10))
+
+    # Sorted by name, the first two are Alex Uno (unknown, 404) and Bea Dos.
+    assert len(_player_requests(api)) == 2
+    assert "Alex Uno" not in set(out["player"])
+    assert "Bea Dos" in set(out["player"])
+
+
+def test_the_free_plan_and_the_switch_never_read_players_on_their_own(monkeypatch):
+    for kwargs in ({"plan": "free"}, {"rankings_fill_missing_players": False}):
+        api = FakePadelApi()
+        source = _source(monkeypatch, api, **kwargs)
+        source.player_ids = {"Alex Uno": 1}
+        source.fetch_rankings(dt.date(2026, 3, 1), dt.date(2026, 3, 10))
+        assert not _player_requests(api)
 
 
 def test_http_source_rejects_an_unknown_plan(monkeypatch):
