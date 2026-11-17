@@ -88,19 +88,43 @@ def ingest_rankings(
     """
     lookback = dt.timedelta(days=config.ingestion.rankings_lookback_days)
     rankings = normalise_raw_rankings(source.fetch_rankings(start - lookback, end))
-
-    # Only snapshots not seen before are written: the first time a snapshot was
-    # seen is when it was available, and an upsert must not move that time.
     known = load_rankings(base_uri)
     if not known.empty and not rankings.empty:
-        keys = ["player", "snapshot_date"]
-        seen = pd.MultiIndex.from_frame(known[keys])
-        rankings = rankings.loc[~pd.MultiIndex.from_frame(rankings[keys]).isin(seen)]
-        rankings = rankings.reset_index(drop=True)
+        rankings = _new_ranking_rows(rankings, known)
 
     storage.write_snapshot(rankings, base_uri, storage.RAW_RANKINGS, snapshot_date)
     logger.info("ingested %d new ranking rows from source %r", len(rankings), source.name)
     return rankings
+
+
+def _new_ranking_rows(fetched: pd.DataFrame, known: pd.DataFrame) -> pd.DataFrame:
+    """The fetched ranking rows worth writing, given what the store already holds.
+
+    A snapshot not seen before is written as fetched. A snapshot already stored
+    is written again only if the fetch fills a value it lacked (a player read
+    on their own once the lists had given only their official points), and then
+    with the stored publication time and values: the first time a snapshot was
+    seen is when it was available, and an upsert must neither move that time
+    nor blank a value it already had.
+    """
+    keys = ["player", "snapshot_date"]
+    values = ["rank_points", "provider_elo"]
+    fetched = deduplicate_rankings(fetched)
+    stored = deduplicate_rankings(known).set_index(keys)
+    is_known = pd.MultiIndex.from_frame(fetched[keys]).isin(stored.index)
+
+    fresh = fetched.loc[~is_known]
+    update = fetched.loc[is_known].set_index(keys)
+    before = stored.loc[update.index]
+    merged = before.copy()
+    merged[values] = before[values].fillna(update[values])
+    gained = (before[values].isna() & merged[values].notna()).any(axis=1)
+    filled = merged.loc[gained].reset_index()
+    if filled.empty:
+        return fresh.reset_index(drop=True)
+    logger.info("filling missing values in %d stored ranking rows", len(filled))
+    parts = [fresh, filled] if not fresh.empty else [filled]
+    return normalise_raw_rankings(pd.concat(parts, ignore_index=True))
 
 
 def load_rankings(base_uri: str) -> pd.DataFrame:

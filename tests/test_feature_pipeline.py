@@ -70,6 +70,34 @@ def test_run_stores_rankings_and_the_provider_baseline(settings, config):
     assert (joined["ranking_published_at"] < joined["played_at"]).all()
 
 
+def _rankings(*rows):
+    import pandas as pd
+
+    columns = ["player", "snapshot_date", "published_at", "rank_points", "provider_elo"]
+    return pd.DataFrame([dict(zip(columns, r, strict=True)) for r in rows])
+
+
+def test_a_stored_snapshot_is_rewritten_only_to_fill_a_missing_value():
+    import pandas as pd
+
+    known = _rankings(
+        ("Ana", "2026-03-02", "2026-03-09T00:00Z", 300.0, None),
+        ("Bo", "2026-03-02", "2026-03-09T00:00Z", 280.0, 1450.0),
+    )
+    fetched = _rankings(
+        ("Ana", "2026-03-02", "2026-11-17T00:00Z", 999.0, 1420.0),  # fills Ana's Elo
+        ("Bo", "2026-03-02", "2026-11-17T00:00Z", 280.0, 1450.0),  # nothing new
+        ("Cy", "2026-03-02", "2026-03-09T00:00Z", 120.0, 1380.0),  # never seen
+    )
+
+    out = pipeline._new_ranking_rows(fetched, known).set_index("player")
+
+    assert sorted(out.index) == ["Ana", "Cy"]
+    # Ana keeps the stored publication time and points; only the gap is filled.
+    assert out.loc["Ana", "published_at"] == pd.Timestamp("2026-03-09T00:00Z")
+    assert (out.loc["Ana", "rank_points"], out.loc["Ana", "provider_elo"]) == (300.0, 1420.0)
+
+
 def test_free_plan_backfill_is_clamped_to_six_months(monkeypatch, config):
     from padel_predictor.common.config import Settings
 

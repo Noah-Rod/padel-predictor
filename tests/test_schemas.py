@@ -126,6 +126,33 @@ def test_rankings_deduplicate_to_the_first_publication():
     assert out.iloc[0]["published_at"] == pd.Timestamp("2026-01-05T08:00Z")
 
 
+def test_a_later_read_fills_a_value_the_first_publication_lacked():
+    from padel_predictor.common.schemas import deduplicate_rankings
+
+    def row(published_at, rank_points, provider_elo):
+        return {
+            "player": "P1",
+            "snapshot_date": "2026-01-05",
+            "published_at": published_at,
+            "rank_points": rank_points,
+            "provider_elo": provider_elo,
+        }
+
+    out = deduplicate_rankings(
+        pd.DataFrame(
+            [
+                row("2026-01-12T00:00Z", 10, None),  # from the list: no Elo entry
+                row("2026-01-20T00:00Z", 99, 1610),  # read on its own later
+            ]
+        )
+    )
+    assert len(out) == 1
+    first = out.iloc[0]
+    assert first["published_at"] == pd.Timestamp("2026-01-12T00:00Z")
+    # The earliest value wins where there was one; the gap is filled.
+    assert (first["rank_points"], first["provider_elo"]) == (10, 1610)
+
+
 def test_rankings_without_publication_time_are_rejected():
     from padel_predictor.common.schemas import normalise_raw_rankings
 

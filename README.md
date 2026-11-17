@@ -226,6 +226,19 @@ the November 2026 runs; the provider limits are from padelapi.org's docs.
 | Match history | last 6 months | full archive | `PADEL_API_PLAN=free` clamps the backfill to 183 days |
 | Ranking history | latest snapshot only | weekly snapshots | free: stored as published at fetch time, never joined onto history |
 | Page size | 50 | 50 | every list endpoint is paged |
+| Elo list | – | players with 5 rated matches in 12 months | a player off the list has no provider rating; their matches get 0.5 |
+
+**Ranking coverage.** The weekly lists are read to the top 200 (four pages per
+list, category and week). Many FIP Platinum and Gold players rank lower, so on
+the paid plan every player of the fetched matches who is missing from those
+lists is then read from `/players/{id}/rankings`, which returns that player's
+weekly official points and Elo for the whole window in one request
+(`ingestion.rankings_fill_missing_players`, at most
+`rankings_max_player_requests` = 400 players per window). That costs one request
+per missing player instead of paging through the full lists every week. A stored
+snapshot is rewritten only to fill a value it lacked, keeping its first
+publication time. To raise the coverage of history already in the store, re-run
+the backfill over it.
 
 Results the free plan hides come back as `hidden_free_plan` and are dropped,
 not turned into fixtures; a resource outside the plan answers `402`.
@@ -238,6 +251,12 @@ not turned into fixtures; a resource outside the plan answers `402`.
 | Free backfill, 6 months | 188 | 26 min | pacing at 9/min |
 | Paid backfill, per year | about 1,100 | about 90 min | weekly ranking snapshots (16 requests each) and Hopsworks writes of 30 s to 3.5 min per chunk; Feb 2025 to Nov 2026 took 2,076 requests and 163 min over two runs |
 | Training run | 0 | about 1.5 min | dependency install, reading the features |
+
+These were measured before missing players were read on their own, which adds
+one request per player missing from the top-200 lists per window: per daily
+run, the players of the fortnight's draws; per 30-day backfill chunk, those of
+the month. That has not been measured yet; the feature run's log prints how many
+ranking entries were read per player.
 
 Going back to 2023 adds about 2,200 requests and three hours. Run it in ranges
 of about a year: each then fits the 120-minute workflow limit and the 4,000

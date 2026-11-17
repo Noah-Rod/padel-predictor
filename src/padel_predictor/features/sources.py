@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -341,6 +342,18 @@ def _mondays(start: dt.date, end: dt.date) -> list[dt.date]:
     return [first + dt.timedelta(weeks=i) for i in range((end - first).days // 7 + 1)]
 
 
+def _player_ids(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Name -> provider id of every player in a list of match records."""
+    ids: dict[str, int] = {}
+    for record in records:
+        teams = record.get("players") if isinstance(record.get("players"), dict) else {}
+        for team in teams.values():
+            for player in team if isinstance(team, list) else []:
+                if isinstance(player, dict) and player.get("name") and player.get("id") is not None:
+                    ids[str(player["name"])] = int(player["id"])
+    return ids
+
+
 class HttpMatchSource:
     """Reads matches and rankings from padelapi.org (``PADEL_API_BASE_URL``).
 
@@ -349,6 +362,12 @@ class HttpMatchSource:
     ``ingestion.levels``, then ``/tournaments/{id}/matches`` pages through each
     one's main draw. Ranking snapshots come from ``/rankings`` per ISO week
     (paid plan) or as the latest snapshot only (free plan).
+
+    The weekly lists are read to ``rankings_max_pages`` (the top 200), which
+    leaves out many players in FIP Platinum and Gold draws. On the paid plan,
+    every player :meth:`fetch` has seen who is missing from those lists is then
+    read on its own from ``/players/{id}/rankings``: one request returns the
+    player's whole weekly series of official points and Elo for the window.
     """
 
     name = "http"
@@ -375,6 +394,9 @@ class HttpMatchSource:
         self._transport = transport
         self._sleep = sleep
         self._clock = clock
+        #: Name -> provider id of every player in the last :meth:`fetch`, so
+        #: :meth:`fetch_rankings` can read those missing from the ranking lists.
+        self.player_ids: dict[str, int] = {}
 
     def _client(self) -> _PadelApiClient:
         return _PadelApiClient(
@@ -412,6 +434,7 @@ class HttpMatchSource:
                     {"sort_by": "played_at", "order_by": "asc"},
                 )
                 records.extend({**match, "tournament": tournament} for match in matches)
+            self.player_ids = _player_ids(records)
             logger.info(
                 "fetched %d matches from %d tournaments for %s..%s (%d requests)",
                 len(records),
@@ -428,10 +451,11 @@ class HttpMatchSource:
     def fetch_rankings(self, start: dt.date, end: dt.date) -> pd.DataFrame:
         """Ranking snapshots for a window.
 
-        The paid plan reads one weekly snapshot per Monday in the window. The
-        free plan only shows the latest snapshot, which is stored as published
-        *now*: it therefore only ever joins onto matches that start after this
-        run, never onto history.
+        The paid plan reads one weekly snapshot per Monday in the window, then
+        the series of every player from the last :meth:`fetch` who is missing
+        from those lists (see the class docstring). The free plan only shows the
+        latest snapshot, which is stored as published *now*: it therefore only
+        ever joins onto matches that start after this run, never onto history.
         """
         if start > end:
             raise ValueError(f"start {start} is after end {end}")
@@ -460,10 +484,15 @@ class HttpMatchSource:
                                 "/rankings", params, max_pages=self.config.rankings_max_pages
                             )
                         )
+            listed = len(records)
+            if self.plan == "paid" and self.config.rankings_fill_missing_players:
+                records.extend(self._missing_player_series(client, records, start, min(end, today)))
             logger.info(
-                "fetched %d ranking entries for %d snapshot(s) (%d requests)",
+                "fetched %d ranking entries for %d snapshot(s), %d of them read per player "
+                "(%d requests)",
                 len(records),
                 len(dates),
+                len(records) - listed,
                 client.requests,
             )
 
@@ -474,6 +503,54 @@ class HttpMatchSource:
             fetched_at=now,
             publication_lag=pd.Timedelta(days=self.config.rankings_publication_lag_days),
         )
+
+    def _missing_player_series(
+        self,
+        client: _PadelApiClient,
+        listed: list[dict[str, Any]],
+        start: dt.date,
+        end: dt.date,
+    ) -> list[dict[str, Any]]:
+        """The weekly series of every fetched player the ranking lists miss.
+
+        A player is missing when the lists hold no official or no Elo entry for
+        them in any week of the window. The provider only puts players with five
+        rated matches in the past year on the Elo list, so some come back without
+        an Elo series and are asked for again on the next run; at most
+        ``rankings_max_player_requests`` players are read per call.
+        """
+        found: dict[str, set[str]] = defaultdict(set)
+        for record in listed:
+            found[str(record.get("name"))].add(str(record.get("type")))
+        missing = sorted(
+            (name, pid)
+            for name, pid in self.player_ids.items()
+            if not set(RANKING_TYPES) <= found.get(name, set())
+        )
+        cap = self.config.rankings_max_player_requests
+        if len(missing) > cap:
+            logger.warning(
+                "%d players are missing from the ranking lists; reading the first %d",
+                len(missing),
+                cap,
+            )
+            missing = missing[:cap]
+
+        records: list[dict[str, Any]] = []
+        params = {"after_date": start.isoformat(), "before_date": end.isoformat()}
+        for name, pid in missing:
+            try:
+                payload = client.get(f"/players/{pid}/rankings", params)
+            except httpx.HTTPStatusError as exc:
+                logger.warning("no rankings for %s (%s)", name, exc.response.status_code)
+                continue
+            series = payload.get("data", []) if isinstance(payload, dict) else payload
+            records.extend(
+                {**r, "name": r.get("name") or name}
+                for r in series or []
+                if isinstance(r, dict) and r.get("type") in RANKING_TYPES
+            )
+        return records
 
     @staticmethod
     def parse_ranking_records(

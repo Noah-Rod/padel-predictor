@@ -196,11 +196,18 @@ def deduplicate_rankings(df: pd.DataFrame) -> pd.DataFrame:
     """One row per player and snapshot, keeping the *earliest* publication time.
 
     The daily run re-reads recent snapshots. The first time a snapshot was seen
-    is when it was really available, so a later re-read must not move it.
+    is when it was really available, so a later re-read must not move it. A
+    later read can still fill a value the first one lacked -- a player read on
+    their own after the lists only had their official points -- so each value
+    is the first one known for that snapshot.
     """
     if df.empty:
         return empty_raw_rankings()
     out = normalise_raw_rankings(df)
     out = out.sort_values("published_at", kind="stable")
-    out = out.drop_duplicates(subset=["player", "snapshot_date"], keep="first")
+    keys = ["player", "snapshot_date"]
+    values = ["rank_points", "provider_elo"]
+    filled = out.groupby(keys, sort=False)[values].transform("first")
+    out = out.assign(**{column: filled[column] for column in values})
+    out = out.drop_duplicates(subset=keys, keep="first")
     return out.sort_values(["published_at", "player"], kind="stable").reset_index(drop=True)
