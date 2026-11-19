@@ -166,6 +166,11 @@ class AblationConfig(BaseModel):
     )
 
 
+class TrainingWindowConfig(BaseModel):
+    # `padel training-window` fits only on the last N months before the test set.
+    months: list[int] = Field(default_factory=lambda: [30, 24, 18, 12, 6])
+
+
 class TrainingConfig(BaseModel):
     test_fraction: float = 0.2
     min_training_rows: int = 200
@@ -174,6 +179,7 @@ class TrainingConfig(BaseModel):
     promotion: PromotionConfig = Field(default_factory=PromotionConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     ablation: AblationConfig = Field(default_factory=AblationConfig)
+    training_window: TrainingWindowConfig = Field(default_factory=TrainingWindowConfig)
 
 
 class InferenceConfig(BaseModel):

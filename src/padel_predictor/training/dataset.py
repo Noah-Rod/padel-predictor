@@ -32,6 +32,8 @@ class Split:
     test_start: pd.Timestamp
     test_end: pd.Timestamp
     meta_test: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
+    #: Every column of the training rows (dates, tournaments), aligned with x_train.
+    meta_train: pd.DataFrame = field(repr=False, default_factory=pd.DataFrame)
 
     @property
     def sizes(self) -> dict[str, int]:
@@ -64,6 +66,7 @@ def time_split(features: pd.DataFrame, test_fraction: float = 0.2) -> Split:
         test_start=test["played_at"].min(),
         test_end=test["played_at"].max(),
         meta_test=test.reset_index(drop=True),
+        meta_train=train.reset_index(drop=True),
     )
 
 
