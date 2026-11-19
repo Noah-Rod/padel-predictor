@@ -8,6 +8,7 @@ developer all start the same code the same way::
     padel data-report
     padel training-pipeline
     padel ablation
+    padel training-window
     padel inference-pipeline
     padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 04"
     padel serve
@@ -103,9 +104,21 @@ def ablation(
     ),
 ) -> None:
     """Retrain without each feature in training.ablation.drop and compare the variants."""
-    from padel_predictor.training import ablation as ablation_runs
+    from padel_predictor.training import experiments
 
-    typer.echo(ablation_runs.run(track=track).to_markdown())
+    typer.echo(experiments.run_ablation(track=track).to_markdown())
+
+
+@app.command("training-window")
+def training_window(
+    track: bool = typer.Option(
+        True, "--track/--no-track", help="Log every variant as a run (never as a model)."
+    ),
+) -> None:
+    """Fit only on the last N months before the test set, for each N in training_window.months."""
+    from padel_predictor.training import experiments
+
+    typer.echo(experiments.run_training_window(track=track).to_markdown())
 
 
 @app.command("inference-pipeline")

@@ -43,7 +43,7 @@ and the baselines on the test split, read back from the store.
 | **1. Feature** | daily cron 04:15 UTC, plus backfill on demand | Fetches results, fixtures and ranking snapshots, rebuilds features, upserts them into the Hopsworks feature store |
 | **2. Training** | weekly cron, plus on demand | Reads the feature store, trains, evaluates against the provider's Elo, logs the run to Weights & Biases and moves the `champion` alias if better |
 | **3. Inference** | daily cron 06:00 UTC, plus on demand from the UI | Loads the champion model, predicts upcoming fixtures, stores the predictions |
-| Ablations | on demand (`ablation.yml`) | Retrains without each of partnership, form and rest on the training split; logs each variant to W&B (job type `ablation`) with its interval against the provider's Elo and against the model on all features. Registers nothing |
+| Experiments | on demand (`experiments.yml`) | On the training split: **ablation** retrains without each of partnership, form and rest; **training window** fits only on the last 30, 24, 18, 12 and 6 months (features still built from all history). Each variant is logged to W&B under its experiment's job type, with its interval against the provider's Elo and against the reference model. Registers nothing |
 
 ### What the model sees
 
@@ -128,6 +128,7 @@ uv run padel data-report      # counts per season/tier + baselines on the test s
 # 2. Training pipeline: train, evaluate, promote to @champion
 uv run padel training-pipeline
 uv run padel ablation         # retrain without partnership, form, rest in turn
+uv run padel training-window  # fit only on the last N months before the test set
 
 # 3. Inference pipeline: predict the upcoming fixtures
 uv run padel inference-pipeline

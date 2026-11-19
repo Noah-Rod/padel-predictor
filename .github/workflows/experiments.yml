@@ -1,0 +1,65 @@
+name: Experiments
+
+# On demand, on the same split as the training pipeline:
+#   ablation         retrain without partnership, form and rest in turn
+#   training-window  fit only on the last N months before the test set
+# Every variant is logged to W&B with the experiment as its job type. Nothing
+# is registered or promoted.
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: "Which experiment to run"
+        type: choice
+        options: [all, ablation, training-window]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: experiments
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # pipefail: the commands are piped through tee, which would otherwise turn
+    # a failed run into a green one.
+    shell: bash
+
+jobs:
+  experiment:
+    name: run experiments
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
+      HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST }}
+      PADEL_TRACKING: ${{ vars.PADEL_TRACKING || 'local' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      WANDB_PROJECT: ${{ vars.WANDB_PROJECT || 'padel-predictor' }}
+      WANDB_ENTITY: ${{ vars.WANDB_ENTITY }}
+      PADEL_API_PLAN: ${{ vars.PADEL_API_PLAN || 'paid' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.17"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Ablation
+        if: inputs.experiment == 'all' || inputs.experiment == 'ablation'
+        run: uv run padel ablation | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Training window
+        if: inputs.experiment == 'all' || inputs.experiment == 'training-window'
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          uv run padel training-window | tee -a "$GITHUB_STEP_SUMMARY"

@@ -85,6 +85,11 @@ training:
     # `padel ablation` retrains without each of these features in turn, on the
     # same split, and reports each against the provider's Elo and the full model.
     drop: [partnership_diff, form_diff, rest_days_diff]
+  training_window:
+    # `padel training-window` fits the model only on the last N months before the
+    # test set, for each N, and compares it with the model on all history. The
+    # features are still built from the whole history; only the fit is limited.
+    months: [30, 24, 18, 12, 6]
 
 inference:
   # How far ahead the batch inference pipeline looks for unplayed matches.

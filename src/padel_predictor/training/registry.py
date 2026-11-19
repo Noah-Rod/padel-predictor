@@ -192,8 +192,8 @@ class _WandbRun:
         self.run.summary.update({f"tag/{k}": v for k, v in tags.items()})
         if tags.get("promoted") == "True":
             self.run.tags = (*self.run.tags, "promoted")
-        if tags.get("ablation") == "True":
-            self.run.tags = (*self.run.tags, "ablation")
+        if tags.get("experiment"):
+            self.run.tags = (*self.run.tags, tags["experiment"])
         if tags.get("data_plan"):
             self.run.tags = (*self.run.tags, f"plan-{tags['data_plan']}")
 
