@@ -208,13 +208,45 @@ def test_team_points_are_summed_and_provider_elo_is_averaged(feature_config):
     assert row["provider_elo_prob"] == pytest.approx(expected_score(1600.0, 1500.0))
 
 
-def test_no_snapshot_means_no_provider_baseline_and_zero_points(feature_config):
+def test_no_snapshot_means_no_provider_baseline_and_no_points(feature_config):
     empty = pd.DataFrame(
         columns=["player", "snapshot_date", "published_at", "rank_points", "provider_elo"]
     )
     row = build_feature_frame(_thursday_match(), feature_config, rankings=empty).iloc[0]
     assert pd.isna(row["provider_elo_prob"])
-    assert row["rank_points_diff"] == pytest.approx(0.0)
+    assert pd.isna(row["rank_points_diff"])
+
+
+def test_an_unranked_player_leaves_the_points_missing_not_zero(feature_config):
+    """A player outside the loaded lists is unknown. Counting them as 0 points
+    would make their pair look like the weakest on tour (review point A3)."""
+    rankings = pd.DataFrame(
+        [
+            _snapshot("P1", "2026-01-01", "2026-01-01T08:00:00Z", 300.0),
+            _snapshot("P2", "2026-01-01", "2026-01-01T08:00:00Z", 100.0),
+            _snapshot("P3", "2026-01-01", "2026-01-01T08:00:00Z", 50.0),
+            # P4 is in no snapshot.
+        ]
+    )
+    row = build_feature_frame(_thursday_match(), feature_config, rankings=rankings).iloc[0]
+
+    assert pd.isna(row["rank_points_diff"])
+    # Every other feature is still there.
+    others = [c for c in FEATURE_COLUMNS if c != "rank_points_diff"]
+    assert row[others].notna().all()
+
+
+def test_a_player_with_zero_points_is_not_treated_as_unranked(feature_config):
+    rankings = pd.DataFrame(
+        [
+            _snapshot("P1", "2026-01-01", "2026-01-01T08:00:00Z", 300.0),
+            _snapshot("P2", "2026-01-01", "2026-01-01T08:00:00Z", 100.0),
+            _snapshot("P3", "2026-01-01", "2026-01-01T08:00:00Z", 50.0),
+            _snapshot("P4", "2026-01-01", "2026-01-01T08:00:00Z", 0.0),
+        ]
+    )
+    row = build_feature_frame(_thursday_match(), feature_config, rankings=rankings).iloc[0]
+    assert row["rank_points_diff"] == pytest.approx(400.0 - 50.0)
 
 
 def test_rankings_override_rank_points_carried_by_the_match(feature_config):

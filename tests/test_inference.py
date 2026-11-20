@@ -92,6 +92,14 @@ def test_unknown_players_are_accepted_as_newcomers(predictor, history):
     assert 0.0 <= prediction.probability_team_a <= 1.0
 
 
+def test_a_pair_with_an_unknown_player_has_no_points_rather_than_zero():
+    from padel_predictor.inference.predict import _team_points
+
+    points = {"P1": 900.0, "P2": 400.0}
+    assert _team_points(points, ("P1", "P2")) == pytest.approx(1300.0)
+    assert _team_points(points, ("P1", "Newcomer")) is None
+
+
 def test_predict_upcoming_respects_the_horizon(predictor, config):
     from padel_predictor.common.schemas import normalise_raw_matches
     from tests.conftest import make_match

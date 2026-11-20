@@ -71,6 +71,35 @@ def test_baselines_are_reported_for_majority_and_elo(features):
     assert 0.0 <= baselines["baseline_elo_accuracy"] <= 1.0
 
 
+def test_the_model_trains_on_a_feature_that_is_missing_in_some_rows(features, config):
+    """Missing ranking points reach the classifier as they are (review point A3)."""
+    split = time_split(features, 0.2)
+    x_train = split.x_train.copy()
+    x_train["rank_points_diff"] = x_train["elo_diff"]
+    x_train.loc[x_train.index[::3], "rank_points_diff"] = np.nan
+
+    model = pipeline.build_model(config).fit(x_train, split.y_train)
+
+    assert model.named_steps["empty_columns"].empty_columns_ == []
+    passed_on = model.named_steps["empty_columns"].transform(x_train)
+    assert passed_on["rank_points_diff"].isna().sum() == x_train["rank_points_diff"].isna().sum()
+    proba = model.predict_proba(split.x_test.assign(rank_points_diff=np.nan))[:, 1]
+    assert np.isfinite(proba).all()
+
+
+def test_the_model_trains_without_any_ranking_points(features, config):
+    """No ranking history at all, as on the free plan: the column is ignored."""
+    split = time_split(features, 0.2)
+    x_train = split.x_train.assign(rank_points_diff=np.nan)
+
+    model = pipeline.build_model(config).fit(x_train, split.y_train)
+
+    assert model.named_steps["empty_columns"].empty_columns_ == ["rank_points_diff"]
+    with_points = model.predict_proba(split.x_test.assign(rank_points_diff=500.0))[:, 1]
+    without = model.predict_proba(split.x_test.assign(rank_points_diff=np.nan))[:, 1]
+    np.testing.assert_allclose(with_points, without)
+
+
 def test_first_model_is_always_promoted():
     promote, reason = registry.should_promote(
         {"log_loss": 0.9}, None, "log_loss", higher_is_better=False, min_improvement=0.002
@@ -308,12 +337,15 @@ class Memoriser:
     """
 
     def __init__(self, x, y) -> None:
-        self.known = {tuple(row): int(label) for row, label in zip(x.to_numpy(), y, strict=True)}
+        self.known = {row: int(label) for row, label in zip(self._rows(x), y, strict=True)}
+
+    @staticmethod
+    def _rows(x):
+        # A missing value never equals itself, so it is keyed as None.
+        return [tuple(row) for row in x.astype(object).where(x.notna(), None).to_numpy()]
 
     def predict_proba(self, x):
-        p = np.array(
-            [{1: 0.999, 0: 0.001}.get(self.known.get(tuple(row)), 0.5) for row in x.to_numpy()]
-        )
+        p = np.array([{1: 0.999, 0: 0.001}.get(self.known.get(row), 0.5) for row in self._rows(x)])
         return np.column_stack([1 - p, p])
 
 

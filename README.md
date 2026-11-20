@@ -60,7 +60,7 @@ pair:
 | Feature | Team value |
 | --- | --- |
 | `elo_diff` | mean of the two players' in-house Elo (start 1500, K = 24) |
-| `rank_points_diff` | sum of the two players' official points, from the last ranking snapshot **published before** the match |
+| `rank_points_diff` | sum of the two players' official points, from the last ranking snapshot **published before** the match; missing when a player of either pair has no points there |
 | `form_diff` | mean of the two players' win rates over each player's last 5 matches, with any partner (0.5 without history) |
 | `rest_days_diff` | days since the pair's most recently active player last played, capped at 60 (14 if never seen) |
 | `partnership_diff` | matches this exact pair has played together before |
@@ -70,6 +70,12 @@ A new partnership starts at `partnership = 0`, but Elo, form and rest stay per
 player, so two strong players who just paired up keep their strength.
 Teams are assigned to side A or B by a hash of the two pair names, never by
 the source's (seeded) order, so the label is balanced.
+
+A player without ranking points is unknown, not worth 0 points: the pair's
+`rank_points_diff` stays missing, which the gradient-boosted trees handle as
+its own case. A 0 would have made every pair outside the loaded lists look
+like the weakest on tour. Only when no training row has ranking points at all
+(a store without ranking history) is the column set to a constant and ignored.
 
 The provider's own Elo is **not** a feature: it is the baseline. Its win
 probability (`provider_elo_prob`, mean of the two players' provider Elo) is

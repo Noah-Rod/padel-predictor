@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.pipeline import Pipeline
 
@@ -75,16 +76,42 @@ class TrainingResult:
         )
 
 
+class EmptyColumnsToZero(BaseEstimator, TransformerMixin):
+    """Set a feature that has no value in any training row to a constant.
+
+    ``rank_points_diff`` is missing where a pair has no ranking points, and the
+    classifier learns from that as it is. It cannot bin a column that is missing
+    in *every* training row, though -- a store without ranking history, as on
+    the free plan. Such a column carries no information, so it becomes 0 at fit
+    and at predict. A column with at least one value passes through untouched,
+    its missing values included.
+    """
+
+    def fit(self, x: pd.DataFrame, y: Any = None) -> EmptyColumnsToZero:
+        frame = pd.DataFrame(x)
+        self.empty_columns_ = [c for c in frame.columns if not frame[c].notna().any()]
+        return self
+
+    def transform(self, x: pd.DataFrame) -> pd.DataFrame:
+        frame = pd.DataFrame(x)
+        if not self.empty_columns_:
+            return frame
+        frame = frame.copy()
+        frame[self.empty_columns_] = 0.0
+        return frame
+
+
 def build_model(config: PipelineConfig) -> Pipeline:
     """The estimator.
 
-    Wrapped in a ``Pipeline`` so any preprocessing added later travels with the
-    model into the registry, instead of living in a script the serving side
-    would have to duplicate.
+    Wrapped in a ``Pipeline`` so its preprocessing travels with the model into
+    the registry, instead of living in a script the serving side would have to
+    duplicate.
     """
     params = config.training.model
     return Pipeline(
         steps=[
+            ("empty_columns", EmptyColumnsToZero()),
             (
                 "classifier",
                 HistGradientBoostingClassifier(
@@ -95,7 +122,7 @@ def build_model(config: PipelineConfig) -> Pipeline:
                     early_stopping=params.early_stopping,
                     random_state=config.training.random_state,
                 ),
-            )
+            ),
         ]
     )
 
