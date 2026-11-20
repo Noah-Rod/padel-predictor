@@ -4,6 +4,11 @@
 probability that team A beats team B, for every fixture up to seven days ahead,
 refreshed daily.
 
+[![Feature pipeline](https://github.com/Noah-Rod/padel-predictor/actions/workflows/feature-pipeline.yml/badge.svg)](https://github.com/Noah-Rod/padel-predictor/actions/workflows/feature-pipeline.yml)
+[![Training pipeline](https://github.com/Noah-Rod/padel-predictor/actions/workflows/training-pipeline.yml/badge.svg)](https://github.com/Noah-Rod/padel-predictor/actions/workflows/training-pipeline.yml)
+[![Inference pipeline](https://github.com/Noah-Rod/padel-predictor/actions/workflows/inference-pipeline.yml/badge.svg)](https://github.com/Noah-Rod/padel-predictor/actions/workflows/inference-pipeline.yml)
+[![CI](https://github.com/Noah-Rod/padel-predictor/actions/workflows/ci.yml/badge.svg)](https://github.com/Noah-Rod/padel-predictor/actions/workflows/ci.yml)
+
 Built for HSLU **MLOps HS26 (I.BA_MLOPS)** as three automated pipelines: a
 feature pipeline that ingests live results, a training pipeline that retrains
 and promotes models, and an inference pipeline that serves predictions.
@@ -219,7 +224,11 @@ history and filled in from then on: the numbers get worse, the pipeline does
 not break. With no key at all, the default `sample` source runs everything
 offline.
 
-The feature and training workflows emit a warning when these are still local.
+The feature workflow does not fall back: without `PADEL_SOURCE`, or with a
+`PADEL_FEATURE_STORE_URI` that is not `hopsworks://` or `gs://`, its first step
+fails the run, so a green run always means real data reached the hosted store.
+The `sample` source is for a local clone and the tests only. The training
+workflow still emits a warning when its tracking is local.
 
 ### Limits and quotas
 

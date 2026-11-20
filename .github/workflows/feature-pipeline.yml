@@ -37,16 +37,37 @@ jobs:
     # A backfill is paced under the provider's rate limit: about 20 min per year.
     timeout-minutes: 120
     env:
-      PADEL_SOURCE: ${{ vars.PADEL_SOURCE || 'sample' }}
+      # No fallbacks: a scheduled run on synthetic data or on the runner's disk
+      # would look green and add nothing, so "Check the configuration" fails it.
+      PADEL_SOURCE: ${{ vars.PADEL_SOURCE }}
       PADEL_API_BASE_URL: ${{ vars.PADEL_API_BASE_URL }}
       PADEL_API_KEY: ${{ secrets.PADEL_API_KEY }}
       PADEL_API_PLAN: ${{ vars.PADEL_API_PLAN || 'paid' }}
-      PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI || 'data/feature_store' }}
+      PADEL_FEATURE_STORE_URI: ${{ vars.PADEL_FEATURE_STORE_URI }}
       HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST }}
       HAS_GCP: ${{ secrets.GCP_SA_KEY != '' }}
 
     steps:
+      - name: Check the configuration
+        run: |
+          failed=0
+          if [ -z "$PADEL_SOURCE" ]; then
+            echo "::error::The repository variable PADEL_SOURCE is not set. Set it to http: this workflow does not fall back to the synthetic sample source."
+            failed=1
+          fi
+          case "$PADEL_FEATURE_STORE_URI" in
+            hopsworks://*|gs://*) ;;
+            *)
+              echo "::error::The repository variable PADEL_FEATURE_STORE_URI must be hopsworks://<project> (or gs://<bucket>), got '${PADEL_FEATURE_STORE_URI}'. A local path is the runner's disk, which is discarded when the job ends."
+              failed=1
+              ;;
+          esac
+          if [ "$failed" -ne 0 ]; then
+            echo "Not run: PADEL_SOURCE and PADEL_FEATURE_STORE_URI must be set as repository variables (README, Going live)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Install uv
@@ -63,16 +84,6 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Warn about an ephemeral feature store
-        if: >-
-          ${{ !startsWith(vars.PADEL_FEATURE_STORE_URI, 'hopsworks://') &&
-              !startsWith(vars.PADEL_FEATURE_STORE_URI, 'gs://') }}
-        run: |
-          echo "::warning::PADEL_FEATURE_STORE_URI is not hopsworks://<project>, so this run writes to"
-          echo "::warning::the runner's local disk and the data is discarded when the job ends."
-          echo "Set the PADEL_FEATURE_STORE_URI repository variable to hopsworks://<project>." \
-            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Backfill
         if: inputs.backfill_start != '' && inputs.backfill_end != ''
