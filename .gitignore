@@ -44,6 +44,12 @@ htmlcov/
 # --- Notebooks ---
 .ipynb_checkpoints/
 
+# --- Course material and received reviews: kept locally, not published ---
+# The course PDFs are not for redistribution and the reviews were written
+# for the author, so neither belongs in a public repository.
+docs/Guidelines/
+docs/reviews/
+
 # --- Editors / OS ---
 .idea/
 .vscode/

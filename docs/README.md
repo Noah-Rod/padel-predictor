@@ -22,7 +22,14 @@ the PDF before 23:59 — not the morning after.
 | `proposal.md` | Working draft of the proposal. Edit it, then export to `proposal.pdf`. |
 | `build_pdf.py` | Markdown to PDF export used for every milestone document. |
 | `milestone_summary_template.md` | Structure for each `ms<n>_summary.pdf`, including the response-to-reviewers format. |
-| `reviews/` | Peer reviews and editorial summaries received for this project (`MS<n>_ReviewerA.pdf`, `MS<n>_ReviewerB.pdf`, `MS<n>_EditorialSummary.pdf`), answered in the next `ms<n>_summary.pdf`. |
+
+## Not in this repository
+
+The course guides (`docs/Guidelines/`) and the reviews and editorial summaries
+received for this project (`docs/reviews/`) stay on the author's machine; both
+folders are git-ignored. The course material is not for redistribution, and the
+reviews were written for the author. Every review point is answered in the next
+`ms<n>_summary.pdf`, which is public.
 
 ## Exporting a draft to PDF
 
