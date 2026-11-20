@@ -9,10 +9,6 @@ ingestion:
   max_retries: 3
   # Ranking snapshots are re-read this many days before each window.
   rankings_lookback_days: 14
-  # Backfilled ranking snapshots have no publication time; they count as
-  # published this many days after their label date, so a snapshot labelled
-  # with a tournament week is never joined onto that week's matches.
-  rankings_publication_lag_days: 7
   # PADEL_API_PLAN=free only reaches this far back (and has no ranking history).
   free_plan_history_days: 183
   # padelapi.org levels in scope (proposal: Premier Padel plus FIP Platinum and Gold).
@@ -39,6 +35,15 @@ features:
   elo_k_factor: 24.0
   # Number of recent matches used for the rolling "form" feature.
   form_window: 5
+  # The provider gives no publication time for a ranking snapshot. Every
+  # snapshot therefore counts as published this many days after the date it is
+  # labelled with -- the same rule for backfilled history and for the daily run,
+  # so training and serving see rankings of the same age. 7 keeps a snapshot
+  # labelled with a tournament week out of that week's matches. It is an
+  # assumption until measured: `padel data-report` lists when each weekly
+  # ranking was first seen by a live run; set this to the delay it shows.
+  # null joins on the publication time as stored (a source that provides one).
+  rankings_publication_lag_days: 7
   # Ordinal encoding of the tour tier; unknown tiers fall back to 0.
   tier_levels:
     major: 4

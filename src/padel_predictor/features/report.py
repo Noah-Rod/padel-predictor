@@ -1,12 +1,14 @@
 """What is in the feature store: counts per season and tier, and the baseline bar.
 
 ``padel data-report`` prints this as Markdown, so the numbers in a milestone
-summary come from the store itself rather than from an estimate.
+summary come from the store itself rather than from an estimate. It also lists
+when each weekly ranking was first seen by a live run: the measurement behind
+``features.rankings_publication_lag_days``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -18,8 +20,38 @@ from padel_predictor.common.config import (
     get_settings,
 )
 from padel_predictor.common.features import labelled
-from padel_predictor.common.schemas import deduplicate_matches
+from padel_predictor.common.schemas import RANKING_FIRST_SEEN_CAP, deduplicate_matches
 from padel_predictor.features.pipeline import load_rankings
+
+#: How many of the latest observed rankings the report lists.
+RANKING_DELAY_ROWS = 8
+
+
+def ranking_delays(rankings: pd.DataFrame) -> pd.DataFrame:
+    """When each weekly ranking was first seen, and how long after its label date.
+
+    One row per snapshot date: ``first_seen_at`` is the earliest stored
+    publication time of any of its players, ``delay_days`` the gap to the label
+    date. ``observed`` is true when a live run saw the snapshot within
+    :data:`~padel_predictor.common.schemas.RANKING_FIRST_SEEN_CAP` of its date.
+    Otherwise it was backfilled, or first read too late, and the stored time
+    says nothing about when it appeared.
+    """
+    columns = ["snapshot_date", "first_seen_at", "delay_days", "observed"]
+    if rankings.empty:
+        return pd.DataFrame(columns=columns)
+    first = (
+        rankings.groupby("snapshot_date")["published_at"]
+        .min()
+        .rename("first_seen_at")
+        .reset_index()
+        .sort_values("snapshot_date")
+        .reset_index(drop=True)
+    )
+    delay = first["first_seen_at"] - first["snapshot_date"]
+    first["delay_days"] = delay.dt.total_seconds() / 86400.0
+    first["observed"] = delay < RANKING_FIRST_SEEN_CAP
+    return first[columns]
 
 
 @dataclass(frozen=True)
@@ -32,6 +64,58 @@ class DataReport:
     baseline: dict[str, float]
     test_rows: int
     test_start: str
+    #: :func:`ranking_delays` of the store, and the lag the features assume.
+    ranking_delays: pd.DataFrame = field(default_factory=lambda: ranking_delays(pd.DataFrame()))
+    publication_lag_days: float | None = None
+
+    def ranking_delay_markdown(self) -> list[str]:
+        """The measured publication delay next to the rule the features use."""
+        lag = self.publication_lag_days
+        rule = (
+            "the publication time as stored"
+            if lag is None
+            else f"{lag:g} days after the date it is labelled with, in a backfill and "
+            "in a live run alike"
+        )
+        lines = [
+            "",
+            "**When each weekly ranking first appeared.** A ranking counts as published "
+            f"{rule} (`features.rankings_publication_lag_days`).",
+        ]
+        observed = self.ranking_delays.loc[self.ranking_delays["observed"].astype(bool)]
+        unknown = len(self.ranking_delays) - len(observed)
+        if observed.empty:
+            lines.append(
+                "No ranking has been seen by a live run within a week of its date yet, "
+                "so the delay is not measured."
+            )
+        else:
+            delay = observed["delay_days"]
+            lines.append(
+                f"Seen by a live run: {len(observed)} ranking(s), first seen "
+                f"{delay.min():.1f} to {delay.max():.1f} days after their date "
+                f"(median {delay.median():.1f}). The run is daily, so each may have "
+                "appeared up to a day earlier."
+            )
+            if lag is not None and delay.max() > lag:
+                lines.append(
+                    f"**The rule is too early:** a ranking was first seen {delay.max():.1f} "
+                    f"days after its date, later than the {lag:g} days the features assume."
+                )
+            lines += ["", "| Ranking dated | First seen (UTC) | Days after its date |"]
+            lines.append("| --- | --- | ---: |")
+            for row in observed.tail(RANKING_DELAY_ROWS).itertuples(index=False):
+                lines.append(
+                    f"| {row.snapshot_date.date()} | {row.first_seen_at:%Y-%m-%d %H:%M} "
+                    f"| {row.delay_days:.1f} |"
+                )
+        if unknown:
+            lines += [
+                "",
+                f"{unknown} ranking(s) were backfilled or first read a week or more after "
+                "their date, so when they appeared is not known.",
+            ]
+        return lines
 
     def to_markdown(self) -> str:
         lines = ["| Season | Tier | Labelled | Upcoming |", "| --- | --- | ---: | ---: |"]
@@ -75,6 +159,8 @@ class DataReport:
                 f"| Majority class | {self.test_rows} | {b['baseline_majority_log_loss']:.4f} "
                 f"| {b['baseline_majority_accuracy']:.3f} |",
             ]
+        if not self.ranking_delays.empty:
+            lines += self.ranking_delay_markdown()
         return "\n".join(lines)
 
 
@@ -122,4 +208,6 @@ def build_report(
         baseline=baseline,
         test_rows=test_rows,
         test_start=test_start,
+        ranking_delays=ranking_delays(rankings),
+        publication_lag_days=config.features.rankings_publication_lag_days,
     )

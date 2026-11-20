@@ -102,10 +102,6 @@ class IngestionConfig(BaseModel):
     # Ranking snapshots are re-read this many days before a window, so the
     # snapshot in force at the window's first match is always in the store.
     rankings_lookback_days: int = 14
-    # Backfilled snapshots carry no publication time. They are treated as
-    # published this many days after the date they are labelled with, so a
-    # snapshot labelled with a tournament week is never visible inside it.
-    rankings_publication_lag_days: int = 7
     # How far back the free plan reaches.
     free_plan_history_days: int = 183
     # padelapi.org tournament levels read by the http source.
@@ -131,6 +127,10 @@ class FeatureConfig(BaseModel):
     elo_initial: float = 1500.0
     elo_k_factor: float = 24.0
     form_window: int = 5
+    # A ranking snapshot counts as published this many days after its label
+    # date, in a backfill and in a live run alike. None joins on the
+    # publication time as stored.
+    rankings_publication_lag_days: float | None = 7.0
     tier_levels: dict[str, int] = Field(default_factory=dict)
 
 

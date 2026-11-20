@@ -10,6 +10,64 @@ from padel_predictor.common import storage
 from padel_predictor.features import pipeline
 
 
+def test_the_report_lists_when_each_ranking_was_first_seen():
+    """The measurement behind the publication lag (review point A1)."""
+    import pandas as pd
+
+    from padel_predictor.common.schemas import normalise_raw_rankings
+    from padel_predictor.features.report import DataReport, ranking_delays
+
+    def row(player, label, published):
+        return {
+            "player": player,
+            "snapshot_date": label,
+            "published_at": published,
+            "rank_points": 1.0,
+            "provider_elo": 1500.0,
+        }
+
+    rankings = normalise_raw_rankings(
+        pd.DataFrame(
+            [
+                row("Ana", "2026-03-02", "2026-03-09T00:00Z"),  # backfilled: label + 7 days
+                row("Ana", "2026-03-09", "2026-03-10T04:15Z"),  # seen live a day later
+                row("Bea", "2026-03-09", "2026-03-12T04:15Z"),  # read on her own, later
+                row("Ana", "2026-03-16", "2026-03-19T04:15Z"),  # seen live three days later
+            ]
+        )
+    )
+
+    delays = ranking_delays(rankings)
+
+    assert delays["observed"].tolist() == [False, True, True]
+    assert delays["delay_days"].iloc[1] == pytest.approx(1 + 4.25 / 24)
+    assert delays["first_seen_at"].iloc[1] == pd.Timestamp("2026-03-10T04:15Z")
+
+    def report(lag):
+        return "\n".join(
+            DataReport(
+                counts=pd.DataFrame(),
+                ranking_rows=0,
+                ranking_snapshots=0,
+                first_match="-",
+                last_match="-",
+                baseline={},
+                test_rows=0,
+                test_start="-",
+                ranking_delays=delays,
+                publication_lag_days=lag,
+            ).ranking_delay_markdown()
+        )
+
+    text = report(7)
+    assert "2 ranking(s), first seen 1.2 to 3.2 days after their date" in text
+    assert "| 2026-03-16 | 2026-03-19 04:15 | 3.2 |" in text
+    assert "1 ranking(s) were backfilled" in text
+    assert "too early" not in text
+    # A lag below what was observed would let a ranking in before it existed.
+    assert "**The rule is too early:**" in report(2)
+
+
 def test_run_writes_raw_and_feature_snapshots(settings, config):
     result = pipeline.run(lookback_days=30, horizon_days=7, settings=settings, config=config)
 

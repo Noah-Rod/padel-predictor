@@ -31,6 +31,7 @@ import pandas as pd
 from padel_predictor.common.config import IngestionConfig, Settings
 from padel_predictor.common.logging import get_logger
 from padel_predictor.common.schemas import (
+    RANKING_FIRST_SEEN_CAP,
     RAW_MATCH_COLUMNS,
     RAW_RANKING_COLUMNS,
     empty_raw_matches,
@@ -454,8 +455,10 @@ class HttpMatchSource:
         The paid plan reads one weekly snapshot per Monday in the window, then
         the series of every player from the last :meth:`fetch` who is missing
         from those lists (see the class docstring). The free plan only shows the
-        latest snapshot, which is stored as published *now*: it therefore only
-        ever joins onto matches that start after this run, never onto history.
+        latest snapshot, which is stored as first seen *now*. The publication
+        rule of the features never dates it before its label date plus the lag,
+        nor, when it is read more than a week after that date, before now: with
+        the default lag of seven days it joins only onto matches after this run.
         """
         if start > end:
             raise ValueError(f"start {start} is after end {end}")
@@ -498,11 +501,7 @@ class HttpMatchSource:
 
         if self.plan == "free":
             records = [{**r, "published_at": now.isoformat()} for r in records]
-        return self.parse_ranking_records(
-            records,
-            fetched_at=now,
-            publication_lag=pd.Timedelta(days=self.config.rankings_publication_lag_days),
-        )
+        return self.parse_ranking_records(records, fetched_at=now)
 
     def _missing_player_series(
         self,
@@ -556,22 +555,26 @@ class HttpMatchSource:
     def parse_ranking_records(
         records: list[dict[str, Any]],
         fetched_at: pd.Timestamp,
-        publication_lag: pd.Timedelta | None = None,
+        first_seen_cap: pd.Timedelta = RANKING_FIRST_SEEN_CAP,
     ) -> pd.DataFrame:
         """Map ``/rankings`` entries onto the ranking schema, one row per player and week.
 
         An ``official`` entry carries the FIP points, an ``elo`` entry carries
         the provider's Elo in ``points``; both are merged on (player, date).
 
-        ``published_at`` is the join key, so it is never guessed optimistically:
+        ``published_at`` records what is known about when the snapshot appeared:
         the provider's own publication time when there is one, otherwise the
-        label date plus ``publication_lag``, and never later than ``fetched_at``
-        would make it -- a snapshot cannot have been available after we saw it,
-        but it may have been available later than its label suggests.
+        time it was fetched, capped at ``first_seen_cap`` after the label date.
+        A daily run fetches a new snapshot within days, so its stored time is
+        an observation of the provider's delay; a backfill fetches it months
+        later, which says nothing, and stores the cap.
+
+        The features do not join on this value but on the one rule in
+        :func:`padel_predictor.common.features.publication_times`, so a
+        snapshot counts the same whether it was backfilled or seen live.
         """
         if not records:
             return empty_raw_rankings()
-        publication_lag = pd.Timedelta(days=7) if publication_lag is None else publication_lag
         rows: dict[tuple[str, pd.Timestamp], dict[str, Any]] = {}
         for record in records:
             try:
@@ -585,7 +588,7 @@ class HttpMatchSource:
                 if published:
                     published_ts = pd.Timestamp(published)
                 else:
-                    published_ts = min(label_ts + publication_lag, fetched_at)
+                    published_ts = min(label_ts + first_seen_cap, fetched_at)
                 points = record.get("points")
                 row = rows.setdefault(
                     (name, label_ts),

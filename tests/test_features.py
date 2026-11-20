@@ -144,6 +144,12 @@ def _week_rankings(points_before, points_leaky, published_leaky):
     return pd.DataFrame(rows)
 
 
+@pytest.fixture
+def stored_times(feature_config):
+    """Join on ``published_at`` as stored: a source with real publication times."""
+    return feature_config.model_copy(update={"rankings_publication_lag_days": None})
+
+
 def _thursday_match(winner="A"):
     # Tournament week Wed 2026-01-07 to Sun 2026-01-11; this match is on Thursday.
     return pd.DataFrame(
@@ -151,7 +157,7 @@ def _thursday_match(winner="A"):
     )
 
 
-def test_snapshot_labelled_with_the_week_but_published_after_it_is_not_used(feature_config):
+def test_snapshot_labelled_with_the_week_but_published_after_it_is_not_used(stored_times):
     """The editorial's case: a snapshot dated inside the tournament week, published once
     the week is over, already contains this match's result and must not be joined."""
     rankings = _week_rankings(100.0, 999.0, published_leaky="2026-01-12T08:00:00Z")
@@ -159,23 +165,91 @@ def test_snapshot_labelled_with_the_week_but_published_after_it_is_not_used(feat
     winners = rankings["player"].isin(["P1", "P2"]) & (rankings["rank_points"] == 999.0)
     rankings.loc[winners, "rank_points"] = 5000.0
 
-    row = build_feature_frame(_thursday_match(), feature_config, rankings=rankings).iloc[0]
+    row = build_feature_frame(_thursday_match(), stored_times, rankings=rankings).iloc[0]
 
     assert row["rank_points_diff"] == pytest.approx(0.0)  # both pairs: 2 x 100 points
     assert row["ranking_published_at"] == pd.Timestamp("2025-12-29T08:00:00Z")
 
 
-def test_snapshot_published_exactly_at_the_start_is_not_used(feature_config):
+def test_snapshot_published_exactly_at_the_start_is_not_used(stored_times):
     """Strictly before: a snapshot published at the scheduled start is too late."""
     rankings = _week_rankings(100.0, 999.0, published_leaky="2026-01-08T12:00:00Z")
-    row = build_feature_frame(_thursday_match(), feature_config, rankings=rankings).iloc[0]
+    row = build_feature_frame(_thursday_match(), stored_times, rankings=rankings).iloc[0]
     assert row["ranking_published_at"] == pd.Timestamp("2025-12-29T08:00:00Z")
 
 
-def test_snapshot_published_before_the_start_is_used(feature_config):
+def test_snapshot_published_before_the_start_is_used(stored_times):
     rankings = _week_rankings(100.0, 999.0, published_leaky="2026-01-08T11:59:00Z")
-    row = build_feature_frame(_thursday_match(), feature_config, rankings=rankings).iloc[0]
+    row = build_feature_frame(_thursday_match(), stored_times, rankings=rankings).iloc[0]
     assert row["ranking_published_at"] == pd.Timestamp("2026-01-08T11:59:00Z")
+
+
+# --------------------------------------------------------------------------- #
+# One publication rule for backfilled and live snapshots (review point A1)
+# --------------------------------------------------------------------------- #
+def _stored_as(first_seen_current_week):
+    """The previous week's ranking and the tournament week's (Monday 2026-01-05),
+    the latter stored with ``first_seen_current_week`` as its publication time."""
+    return _week_rankings(100.0, 999.0, published_leaky=first_seen_current_week)
+
+
+BACKFILLED = "2026-01-12T00:00:00Z"  # fetched months later: stored at label + 7 days
+SEEN_LIVE = "2026-01-06T04:15:00Z"  # the daily run saw it the day after its date
+
+
+def test_a_live_snapshot_joins_at_the_same_time_as_a_backfilled_one(feature_config):
+    """The same ranking must reach a match whether a backfill or a live run fetched
+    it. Joining on the fetch time gave live matches rankings a week fresher than
+    any training match had (review point A1)."""
+    columns = [*FEATURE_COLUMNS, "provider_elo_prob", "ranking_published_at"]
+    for played_at in ("2026-01-08T12:00:00Z", "2026-01-13T12:00:00Z"):
+        match = pd.DataFrame([make_match("m", played_at, ("P1", "P2"), ("P3", "P4"))])
+        pd.testing.assert_frame_equal(
+            build_feature_frame(match, feature_config, rankings=_stored_as(BACKFILLED))[columns],
+            build_feature_frame(match, feature_config, rankings=_stored_as(SEEN_LIVE))[columns],
+        )
+
+
+def test_a_snapshot_seen_live_is_not_used_before_its_date_plus_the_lag(feature_config):
+    row = build_feature_frame(
+        _thursday_match(), feature_config, rankings=_stored_as(SEEN_LIVE)
+    ).iloc[0]
+    # Seen on Tuesday, but the Thursday match still gets the previous week's
+    # ranking, which counts from its own date plus seven days.
+    assert row["ranking_published_at"] == pd.Timestamp("2026-01-05T00:00:00Z")
+
+    after = pd.DataFrame([make_match("m", "2026-01-12T00:00:01Z", ("P1", "P2"), ("P3", "P4"))])
+    row = build_feature_frame(after, feature_config, rankings=_stored_as(SEEN_LIVE)).iloc[0]
+    assert row["ranking_published_at"] == pd.Timestamp("2026-01-12T00:00:00Z")
+
+
+def test_a_measured_lag_applies_to_backfilled_snapshots_too(feature_config):
+    """Once the delay is measured, lowering the lag needs no rewrite of the store."""
+    two_days = feature_config.model_copy(update={"rankings_publication_lag_days": 2})
+    row = build_feature_frame(_thursday_match(), two_days, rankings=_stored_as(BACKFILLED)).iloc[0]
+    assert row["ranking_published_at"] == pd.Timestamp("2026-01-07T00:00:00Z")
+
+
+def test_a_snapshot_first_seen_long_after_its_date_keeps_that_time(feature_config):
+    """Nothing shows it was available earlier: the free plan's current ranking
+    can carry an old date, and must not reach matches played before it was read."""
+    from padel_predictor.common.features import publication_times
+    from padel_predictor.common.schemas import normalise_raw_rankings
+
+    rankings = normalise_raw_rankings(
+        pd.DataFrame(
+            [
+                _snapshot("P1", "2026-01-05", "2026-01-06T04:15:00Z", 1.0),  # seen live
+                _snapshot("P2", "2026-01-05", "2026-01-12T00:00:00Z", 1.0),  # backfilled
+                _snapshot("P3", "2026-01-05", "2026-02-20T09:00:00Z", 1.0),  # seen late
+            ]
+        )
+    ).set_index("player")
+
+    times = publication_times(rankings, pd.Timedelta(days=7))
+
+    assert times["P1"] == times["P2"] == pd.Timestamp("2026-01-12T00:00:00Z")
+    assert times["P3"] == pd.Timestamp("2026-02-20T09:00:00Z")
 
 
 def test_later_snapshots_cannot_change_a_match_s_features(feature_config):

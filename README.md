@@ -40,8 +40,9 @@ Which tool does what, what starts each workflow, and what flows where:
 The offline backends exist so that a reviewer can clone and run everything
 without an account; the scheduled workflows use the hosted ones, because a
 GitHub Actions runner starts with an empty disk every time. Every feature run
-ends with `padel data-report` in its step summary: counts per season and tier
-and the baselines on the test split, read back from the store.
+ends with `padel data-report` in its step summary: counts per season and tier,
+the baselines on the test split, and when each weekly ranking was first seen,
+all read back from the store.
 
 | Pipeline | Trigger | What it does |
 | --- | --- | --- |
@@ -93,10 +94,20 @@ A few design decisions carry most of the weight:
 - **Rankings join on publication time.** Ranking snapshots are weekly and a
   tournament runs Wednesday to Sunday, so a snapshot labelled with a tournament
   week can already contain that week's results. Each player gets the latest
-  snapshot whose `published_at` is strictly before the scheduled start; backfilled
-  snapshots without a publication time count as published seven days after
-  their label date. Unit tests cover the published-after-the-week and
-  published-exactly-at-the-start cases.
+  snapshot published strictly before the scheduled start. Unit tests cover the
+  published-after-the-week and published-exactly-at-the-start cases.
+- **One publication rule for history and for today.** The provider gives no
+  publication time, so every snapshot counts as published
+  `features.rankings_publication_lag_days` (7) after the date it is labelled
+  with (`publication_times` in `common/features.py`). When it was fetched plays
+  no part: a backfill fetches a snapshot months later and the daily run within
+  days, and joining on the fetch time served the model rankings up to a week
+  fresher than any it was trained on. The store still records when a live run
+  first saw each snapshot, and `padel data-report` lists those delays at the end
+  of every feature run. Seven days is an assumption until a few weeks of them
+  are in; the lag is then set to the measured delay and applies to backfilled
+  and live snapshots alike at the next rebuild, with no rewrite of the store.
+  A snapshot first seen more than a week after its date keeps that time.
 - **Same-day rounds replay in draw order.** Matches without an announced start
   time fall back to midnight of the day played, so several rounds of one event
   can share a timestamp. Ties are broken by round, so a quarter-final is never
@@ -236,8 +247,9 @@ under "Limits and quotas" below.
 
 **Without a subscription.** `PADEL_API_PLAN=free` runs the same pipeline on the
 provider's free tier: the backfill is clamped to the last six months and, as
-there is no ranking history, only the current ranking is stored, published at
-fetch time. Ranking points and the provider baseline are therefore missing for
+there is no ranking history, only the current ranking is stored, first seen at
+fetch time and joined by the same publication rule as every other snapshot.
+Ranking points and the provider baseline are therefore missing for
 history and filled in from then on: the numbers get worse, the pipeline does
 not break. With no key at all, the default `sample` source runs everything
 offline.
@@ -261,7 +273,7 @@ the November 2026 runs; the provider limits are from padelapi.org's docs.
 | Requests per day | 2,000 | 4,000 | a `429` with a long `Retry-After` stops the run cleanly; rerun to resume |
 | Requests per month | 50,000 | 50,000 | a daily run needs about 25 (free) to 60 (paid) |
 | Match history | last 6 months | full archive | `PADEL_API_PLAN=free` clamps the backfill to 183 days |
-| Ranking history | latest snapshot only | weekly snapshots | free: stored as published at fetch time, never joined onto history |
+| Ranking history | latest snapshot only | weekly snapshots | free: stored as first seen at fetch time; under the 7-day rule it never joins onto matches played before it was read |
 | Page size | 50 | 50 | every list endpoint is paged |
 | Elo list | – | players with 5 rated matches in 12 months | a player off the list has no provider rating; their matches get 0.5 |
 

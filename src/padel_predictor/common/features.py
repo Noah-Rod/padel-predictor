@@ -11,11 +11,18 @@ every match the feature row is computed *before* that match's result is folded
 into the state, so a row only ever sees matches that finished earlier.
 
 **Rankings are joined on publication time.** Official points and the provider's
-Elo come from weekly snapshots. A snapshot is matched to a match only if its
-``published_at`` is strictly before the match's scheduled start
-(:func:`attach_rankings`), never by the date the snapshot is labelled with: a
-snapshot labelled with a tournament week can be published after that week and
-already contain its results.
+Elo come from weekly snapshots. A snapshot is matched to a match only if it was
+published strictly before the match's scheduled start (:func:`attach_rankings`),
+never by the date the snapshot is labelled with: a snapshot labelled with a
+tournament week can be published after that week and already contain its
+results.
+
+**One publication rule for history and for today.** The provider gives no
+publication time, so :func:`publication_times` derives it: the label date plus
+``rankings_publication_lag_days``. The rule does not depend on when a snapshot
+was fetched. A backfill fetches it months later and a daily run within days, and
+if the fetch time decided, the model would be trained on rankings a week older
+than the ones it is served.
 
 **From two players to one team.** Padel is played in pairs, so every
 player-level value is aggregated to the pair before the A-minus-B difference:
@@ -51,7 +58,7 @@ from collections.abc import Iterable, Sequence
 import pandas as pd
 
 from padel_predictor.common.config import FeatureConfig, get_pipeline_config
-from padel_predictor.common.schemas import normalise_raw_matches
+from padel_predictor.common.schemas import RANKING_FIRST_SEEN_CAP, normalise_raw_matches
 
 #: Model inputs, in the order the model expects them.
 FEATURE_COLUMNS: tuple[str, ...] = (
@@ -214,14 +221,43 @@ _SIDES: tuple[tuple[str, tuple[str, str]], ...] = (
 )
 
 
-def attach_rankings(matches: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFrame:
+def publication_times(rankings: pd.DataFrame, lag: pd.Timedelta) -> pd.Series:
+    """When each ranking snapshot counts as published: its label date plus ``lag``.
+
+    The same rule for every snapshot, whether a backfill fetched it months
+    after it appeared or a daily run within days. The stored ``published_at``
+    of a snapshot without a publication time is only when it was first fetched
+    (capped a week after the label date), so joining on it would give live
+    matches fresher rankings than any training match had.
+
+    One exception: a snapshot first seen more than
+    :data:`~padel_predictor.common.schemas.RANKING_FIRST_SEEN_CAP` after its
+    label date keeps that time if it is the later one. Nothing shows it was
+    available before -- the free plan's current ranking can carry an old date.
+    """
+    label = rankings["snapshot_date"]
+    stored = rankings["published_at"]
+    assumed = label + lag
+    seen_late = stored > label + RANKING_FIRST_SEEN_CAP
+    return assumed.where(~seen_late, assumed.where(assumed >= stored, stored))
+
+
+def attach_rankings(
+    matches: pd.DataFrame,
+    rankings: pd.DataFrame,
+    publication_lag: pd.Timedelta | None = None,
+) -> pd.DataFrame:
     """As-of join of ranking snapshots onto matches, strictly before the start.
 
-    For each of the four players the latest snapshot with
-    ``published_at < played_at`` is used (``allow_exact_matches=False``). A
-    snapshot published at or after the scheduled start -- for instance one
-    labelled with the current tournament week but published once that week is
-    over -- is never visible to the match.
+    For each of the four players the latest snapshot published strictly before
+    ``played_at`` is used (``allow_exact_matches=False``). A snapshot published
+    at or after the scheduled start -- for instance one labelled with the
+    current tournament week but published once that week is over -- is never
+    visible to the match.
+
+    With ``publication_lag`` the publication time is the one
+    :func:`publication_times` derives, as in every pipeline; without it the
+    stored ``published_at`` is taken as it is.
 
     Overwrites ``team_{a,b}_rank_points`` (sum of the two players; NaN unless
     both have a snapshot with points, as a half-known pair would look weaker
@@ -231,6 +267,8 @@ def attach_rankings(matches: pd.DataFrame, rankings: pd.DataFrame) -> pd.DataFra
 
     out = matches.copy()
     ranks = normalise_raw_rankings(rankings)
+    if publication_lag is not None:
+        ranks = ranks.assign(published_at=publication_times(ranks, publication_lag))
     ranks = ranks.sort_values("published_at", kind="stable")
     played_at = out["played_at"].astype("datetime64[ns, UTC]")
 
@@ -301,8 +339,11 @@ def build_feature_frame(
         return pd.DataFrame(
             columns=[*KEY_COLUMNS, *FEATURE_COLUMNS, *BASELINE_COLUMNS, TARGET_COLUMN]
         )
+    config = config or get_pipeline_config().features
     if rankings is not None:
-        matches = attach_rankings(matches, rankings)
+        lag_days = config.rankings_publication_lag_days
+        lag = None if lag_days is None else pd.Timedelta(days=lag_days)
+        matches = attach_rankings(matches, rankings, publication_lag=lag)
     else:
         matches = matches.assign(provider_elo_prob=float("nan"), ranking_published_at=pd.NaT)
 

@@ -173,12 +173,11 @@ def _ranking(name: str, ranking_type: str, points, date: str = "2026-01-05", **e
     }
 
 
-def test_backfilled_snapshot_without_publication_time_counts_as_published_a_week_later():
+def test_backfilled_snapshot_without_publication_time_is_stored_at_the_cap():
     fetched_at = pd.Timestamp("2026-06-01T00:00Z")
     out = HttpMatchSource.parse_ranking_records(
         [_ranking("A1", "official", 900), _ranking("A1", "elo", 1610)],
         fetched_at=fetched_at,
-        publication_lag=pd.Timedelta(days=7),
     )
     assert len(out) == 1  # official points and Elo merged into one row
     row = out.iloc[0]
@@ -187,7 +186,7 @@ def test_backfilled_snapshot_without_publication_time_counts_as_published_a_week
     assert (row["rank_points"], row["provider_elo"]) == (900, 1610)
 
 
-def test_explicit_publication_time_wins_and_lag_never_passes_the_fetch_time():
+def test_explicit_publication_time_wins_and_a_live_fetch_is_stored_as_first_seen():
     fetched_at = pd.Timestamp("2026-01-07T09:00Z")
     out = HttpMatchSource.parse_ranking_records(
         [

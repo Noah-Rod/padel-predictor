@@ -153,10 +153,21 @@ def orient_teams(df: pd.DataFrame) -> pd.DataFrame:
 RAW_RANKING_COLUMNS: tuple[str, ...] = (
     "player",
     "snapshot_date",  # the date the provider labels the snapshot with
-    "published_at",  # UTC time the snapshot became available -- the join key
+    # UTC time the snapshot was first available as far as the source knows:
+    # its own publication time, else when it was first fetched, capped at
+    # RANKING_FIRST_SEEN_CAP after the label date. The features join on the
+    # time :func:`padel_predictor.common.features.publication_times` derives.
+    "published_at",
     "rank_points",  # official ranking points of the player
     "provider_elo",  # the data provider's own Elo rating of the player
 )
+
+
+#: A snapshot without a publication time is stored as first seen when it was
+#: fetched, but at most this long after its label date: a backfill fetches it
+#: months later, which says nothing about when it appeared. A stored time below
+#: the cap is therefore a live observation of the provider's publication delay.
+RANKING_FIRST_SEEN_CAP = pd.Timedelta(days=7)
 
 
 def empty_raw_rankings() -> pd.DataFrame:
