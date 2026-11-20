@@ -255,6 +255,60 @@ def test_training_reports_the_gap_to_the_provider_elo(settings, config):
     assert result.baselines["vs_provider_elo_ci_low"] <= result.baselines["vs_provider_elo_ci_high"]
 
 
+def test_the_run_summary_leads_with_the_rated_matches(settings, config):
+    """The criterion is the gap where the provider has a rating (editorial point E1)."""
+    from padel_predictor.features import pipeline as feature_pipeline
+    from padel_predictor.features.report import build_report
+
+    end = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    feature_pipeline.backfill(end - dt.timedelta(days=200), end, settings=settings, config=config)
+    result = pipeline.run(settings=settings, config=config, register=False)
+
+    summary = result.summary()
+    assert summary.index("rated ") < summary.index("all matches, unrated at 0.5")
+    assert f"criterion met={result.success_criterion_met}" in summary
+    assert result.success_criterion_met == bool(result.baselines["covered_beats_provider_elo"])
+
+    report = build_report(settings=settings, config=config).to_markdown()
+    rows = [line for line in report.splitlines() if "Elo" in line]
+    assert rows[0].startswith("| **Provider Elo where it has a rating**")
+    assert rows[1].startswith("| In-house Elo, same matches")
+    assert "nan" not in report
+
+
+def test_baselines_are_also_scored_on_the_matches_the_provider_rates(features):
+    import pandas as pd
+
+    from padel_predictor.training.dataset import baseline_metrics, rated_by_provider
+
+    every_second = np.arange(len(features)) % 2 == 0
+    features = features.assign(
+        provider_elo_prob=pd.Series(0.7, index=features.index).where(every_second)
+    )
+    split = time_split(features, 0.2)
+    rated = rated_by_provider(split)
+    out = baseline_metrics(split)
+
+    assert 0 < rated.sum() < len(split.y_test)
+    assert out["baseline_provider_elo_rated_rows"] == rated.sum()
+    expected = classification_metrics(split.y_test[rated], np.full(rated.sum(), 0.7))
+    assert out["baseline_provider_elo_rated_log_loss"] == pytest.approx(expected["log_loss"])
+    # The same matches for the in-house Elo, so the two rows compare like for like.
+    elo_prob = 1.0 / (1.0 + 10.0 ** (-split.x_test["elo_diff"].to_numpy() / 400.0))
+    assert out["baseline_elo_rated_log_loss"] == pytest.approx(
+        classification_metrics(split.y_test[rated], elo_prob[rated])["log_loss"]
+    )
+
+
+def test_without_any_provider_rating_the_rated_baselines_are_missing(features):
+    from padel_predictor.training.dataset import baseline_metrics
+
+    out = baseline_metrics(time_split(features, 0.2))
+    assert out["baseline_provider_elo_rated_rows"] == 0
+    assert np.isnan(out["baseline_provider_elo_rated_log_loss"])
+    assert np.isnan(out["baseline_elo_rated_log_loss"])
+
+
 def test_local_registry_versions_models_and_moves_the_champion_alias(settings):
     from sklearn.dummy import DummyClassifier
 
@@ -513,6 +567,56 @@ def test_an_empty_registry_starts_with_the_provider_elo_as_champion(settings, co
     assert result.champion_metrics["log_loss"] == pytest.approx(
         result.baselines["baseline_provider_elo_log_loss"]
     )
+
+
+def test_the_first_promotion_is_decided_where_the_provider_has_a_rating(
+    settings, small_window_config, features
+):
+    """Beating the 0.5 an unrated match gets is not beating the provider (E1, B1)."""
+    import pandas as pd
+
+    from padel_predictor.common import storage
+
+    config = small_window_config
+    # The provider rates every fourth match, and is clearly better there.
+    won = features["team_a_won"].astype("float64")
+    every_fourth = pd.Series(np.arange(len(features)) % 4 == 0, index=features.index)
+    features = features.assign(provider_elo_prob=(0.25 + 0.5 * won).where(every_fourth))
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    rated = int(
+        time_split(features, config.training.test_fraction)
+        .meta_test["provider_elo_prob"]
+        .notna()
+        .sum()
+    )
+    assert config.training.promotion.min_comparison_rows <= rated < result.test_rows
+    # With the unrated matches at 0.5 the model is ahead and used to be promoted ...
+    assert (
+        result.baselines["vs_provider_elo_log_loss_diff"]
+        < -config.training.promotion.min_improvement
+    )
+    # ... but where the provider has a rating it is not, and that decides.
+    assert result.comparison_rows == rated
+    assert "the provider has a rating for" in result.reason
+    assert not result.promoted
+    assert registry.load_champion(settings).version == "v1"
+
+
+def test_the_provider_elo_champion_is_compared_on_all_matches_without_ratings(
+    settings, config, features
+):
+    """No ranking history (the free plan): the provider is a coin flip everywhere."""
+    from padel_predictor.common import storage
+
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    assert result.comparison_rows == result.test_rows
+    assert "which rates only 0 of them" in result.reason
+    assert result.promoted
 
 
 def test_a_model_that_does_not_beat_the_provider_is_not_served(settings, config, features):

@@ -35,6 +35,7 @@ from padel_predictor.training.dataset import (
     classification_metrics,
     covered_comparison,
     provider_elo_probabilities,
+    rated_by_provider,
     time_split,
     unseen_by,
 )
@@ -57,21 +58,28 @@ class TrainingResult:
     #: Test matches the champion had not been trained on, which both were scored on.
     comparison_rows: int | None = None
 
+    @property
+    def success_criterion_met(self) -> bool:
+        """The model beats the provider's Elo on the matches the provider rates."""
+        return bool(self.baselines["covered_beats_provider_elo"])
+
     def summary(self) -> str:
+        b = self.baselines
         return (
             f"train={self.train_rows} test={self.test_rows} "
             f"log_loss={self.metrics['log_loss']:.4f} "
-            f"accuracy={self.metrics['accuracy']:.4f} "
-            f"(provider elo {self.baselines['baseline_provider_elo_log_loss']:.4f}, "
-            f"diff {self.baselines['vs_provider_elo_log_loss_diff']:+.4f} "
-            f"[{self.baselines['vs_provider_elo_ci_low']:+.4f}, "
-            f"{self.baselines['vs_provider_elo_ci_high']:+.4f}]; "
-            f"covered {self.baselines['covered_rows']:.0f}: "
-            f"model {self.baselines['covered_model_log_loss']:.4f} "
-            f"vs provider {self.baselines['covered_provider_elo_log_loss']:.4f}, "
-            f"diff {self.baselines['covered_vs_provider_elo_log_loss_diff']:+.4f} "
-            f"[{self.baselines['covered_vs_provider_elo_ci_low']:+.4f}, "
-            f"{self.baselines['covered_vs_provider_elo_ci_high']:+.4f}]) "
+            f"accuracy={self.metrics['accuracy']:.4f} | "
+            # The success criterion comes first: the matches the provider rates.
+            f"rated {b['covered_rows']:.0f}: "
+            f"model {b['covered_model_log_loss']:.4f} "
+            f"vs provider {b['covered_provider_elo_log_loss']:.4f}, "
+            f"diff {b['covered_vs_provider_elo_log_loss_diff']:+.4f} "
+            f"[{b['covered_vs_provider_elo_ci_low']:+.4f}, "
+            f"{b['covered_vs_provider_elo_ci_high']:+.4f}], "
+            f"criterion met={self.success_criterion_met} | "
+            f"all matches, unrated at 0.5: provider {b['baseline_provider_elo_log_loss']:.4f}, "
+            f"diff {b['vs_provider_elo_log_loss_diff']:+.4f} "
+            f"[{b['vs_provider_elo_ci_low']:+.4f}, {b['vs_provider_elo_ci_high']:+.4f}] | "
             f"promoted={self.promoted} [{self.reason}]"
         )
 
@@ -166,7 +174,12 @@ def evaluate(model: Any, split: Split) -> dict[str, float]:
 
 
 def compare_to_provider_elo(model: Any, split: Split, config: PipelineConfig) -> dict[str, float]:
-    """The success criterion: a bootstrap interval on the gap to the provider's Elo."""
+    """A bootstrap interval on the gap to the provider's Elo.
+
+    ``covered_*`` is the success criterion: the matches the provider has a
+    rating for. ``vs_provider_elo_*`` is the same gap on every test match with
+    an unrated one at 0.5, kept for comparison with earlier runs.
+    """
     evaluation = config.training.evaluation
     provider_prob, _ = provider_elo_probabilities(split)
     model_proba = model.predict_proba(split.x_test)[:, 1]
@@ -257,6 +270,13 @@ def compare_with_champion(
     scored only on the test matches after the champion's ``train_end``
     (:func:`~padel_predictor.training.dataset.unseen_by`); the candidate's own
     metrics in the run stay on the whole test set.
+
+    When the champion is the provider's Elo, both are scored only on the test
+    matches the provider has a rating for. On the others it predicts 0.5, and a
+    model that merely beats a coin flip there would be served without having
+    beaten the provider anywhere. Only when the provider rates fewer than
+    ``min_comparison_rows`` test matches -- no ranking history, as on the free
+    plan -- is the whole test set used, and the reason says so.
     """
     promotion = config.training.promotion
     rule = {
@@ -271,7 +291,18 @@ def compare_with_champion(
     unseen = unseen_by(split, champion.train_end)
     rows = int(unseen.sum())
     if not getattr(champion.model, "trained_on_matches", True):
-        scope = f"all {rows} test matches (champion {champion.version} is the provider's Elo)"
+        rated = rated_by_provider(split)
+        if int(rated.sum()) >= promotion.min_comparison_rows:
+            unseen, rows = rated, int(rated.sum())
+            scope = (
+                f"the {rows} of {len(rated)} test matches the provider has a rating for "
+                f"(champion {champion.version} is the provider's Elo)"
+            )
+        else:
+            scope = (
+                f"all {rows} test matches (champion {champion.version} is the provider's Elo, "
+                f"which rates only {int(rated.sum())} of them)"
+            )
     elif champion.train_end is None:
         logger.warning(
             "champion %s has no recorded training end; comparing on the whole test set, "
@@ -362,10 +393,13 @@ def _track_and_promote(
             {
                 "promoted": str(promote),
                 "promotion_reason": reason,
-                "beats_provider_elo": str(bool(baselines["beats_provider_elo"])),
+                # The criterion: the gap on the matches the provider rates.
+                "success_criterion_met": str(bool(baselines["covered_beats_provider_elo"])),
                 "beats_provider_elo_where_covered": str(
                     bool(baselines["covered_beats_provider_elo"])
                 ),
+                # On all test matches, an unrated one at 0.5: flatters the model.
+                "beats_provider_elo": str(bool(baselines["beats_provider_elo"])),
                 "data_plan": settings.api_plan,
             }
         )

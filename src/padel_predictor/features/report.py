@@ -50,15 +50,29 @@ class DataReport:
                 "",
                 f"Out-of-time test set: {self.test_rows} matches from {self.test_start}.",
                 "",
-                "| Baseline on the test set | Log loss | Accuracy |",
-                "| --- | ---: | ---: |",
-                f"| Provider Elo (as published before each match, "
-                f"coverage {b['baseline_provider_elo_coverage']:.0%}) "
+                "| Baseline on the test set | Matches | Log loss | Accuracy |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+            rated = int(b["baseline_provider_elo_rated_rows"])
+            if rated:
+                # The bar of the success criterion, and the in-house Elo on the
+                # same matches so the two can be compared like for like.
+                lines += [
+                    f"| **Provider Elo where it has a rating** (as published before each match; "
+                    f"{b['baseline_provider_elo_coverage']:.0%} of the test set) "
+                    f"| {rated} | **{b['baseline_provider_elo_rated_log_loss']:.4f}** "
+                    f"| {b['baseline_provider_elo_rated_accuracy']:.3f} |",
+                    f"| In-house Elo, same matches | {rated} "
+                    f"| {b['baseline_elo_rated_log_loss']:.4f} "
+                    f"| {b['baseline_elo_rated_accuracy']:.3f} |",
+                ]
+            lines += [
+                f"| Provider Elo, all matches (unrated at 0.5) | {self.test_rows} "
                 f"| {b['baseline_provider_elo_log_loss']:.4f} "
                 f"| {b['baseline_provider_elo_accuracy']:.3f} |",
-                f"| In-house Elo | {b['baseline_elo_log_loss']:.4f} "
-                f"| {b['baseline_elo_accuracy']:.3f} |",
-                f"| Majority class | {b['baseline_majority_log_loss']:.4f} "
+                f"| In-house Elo, all matches | {self.test_rows} "
+                f"| {b['baseline_elo_log_loss']:.4f} | {b['baseline_elo_accuracy']:.3f} |",
+                f"| Majority class | {self.test_rows} | {b['baseline_majority_log_loss']:.4f} "
                 f"| {b['baseline_majority_accuracy']:.3f} |",
             ]
         return "\n".join(lines)

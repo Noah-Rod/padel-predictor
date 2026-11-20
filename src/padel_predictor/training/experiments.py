@@ -96,15 +96,15 @@ class ExperimentReport:
             f"{self.test_start}. Gaps are log loss differences with 95 % bootstrap "
             "intervals; negative means the variant is better.",
             "",
-            "| Variant | Trained on | Log loss | Accuracy | vs provider Elo, all | "
-            f"vs provider Elo, rated only | vs {self.reference} |",
+            "| Variant | Trained on | Log loss | Accuracy | vs provider Elo, rated matches | "
+            f"vs provider Elo, all (unrated at 0.5) | vs {self.reference} |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
         for v in self.variants:
             lines.append(
                 f"| {v.label} | {v.train_rows} from {v.train_start} | "
                 f"{v.metrics['log_loss']:.4f} | {v.metrics['accuracy']:.1%} | "
-                f"{provider(v, '')} | {provider(v, 'covered_')} | "
+                f"{provider(v, 'covered_')} | {provider(v, '')} | "
                 f"{gap(v.vs_reference, 'mean', 'ci_low', 'ci_high')} |"
             )
         if self.skipped:

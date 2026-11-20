@@ -160,6 +160,19 @@ def provider_elo_probabilities(split: Split) -> tuple[np.ndarray, float]:
     return np.where(np.isfinite(raw), raw, 0.5), coverage
 
 
+def rated_by_provider(split: Split) -> np.ndarray:
+    """Mask of the test matches the provider has a rating for, for all four players.
+
+    The success criterion and the first promotion are judged on these matches:
+    on the others the provider's probability is a 0.5 fill, and beating a coin
+    flip there says nothing about beating the provider.
+    """
+    if "provider_elo_prob" not in split.meta_test.columns:
+        return np.zeros(len(split.y_test), dtype=bool)
+    raw = pd.to_numeric(split.meta_test["provider_elo_prob"], errors="coerce").to_numpy(float)
+    return np.isfinite(raw)
+
+
 def baseline_metrics(split: Split) -> dict[str, float]:
     """Metrics for the baselines any real model has to beat.
 
@@ -167,6 +180,11 @@ def baseline_metrics(split: Split) -> dict[str, float]:
     * ``elo``: the in-house Elo expectation from ``elo_diff``.
     * ``provider_elo``: the data provider's own Elo as published before each
       match -- the bar in the success criterion.
+
+    The provider's Elo and the in-house Elo are also scored on the matches the
+    provider has a rating for (``*_rated_*``): that is the bar, and the in-house
+    Elo on the same matches shows whether a difference comes from the model or
+    from which matches are counted.
     """
     majority_rate = float(split.y_train.mean())
     majority = classification_metrics(split.y_test, np.full(len(split.y_test), majority_rate))
@@ -177,11 +195,22 @@ def baseline_metrics(split: Split) -> dict[str, float]:
     provider_prob, coverage = provider_elo_probabilities(split)
     provider = classification_metrics(split.y_test, provider_prob)
 
+    rated = rated_by_provider(split)
+    if rated.any():
+        y_rated = split.y_test.to_numpy()[rated]
+        provider_rated = classification_metrics(y_rated, provider_prob[rated])
+        elo_rated = classification_metrics(y_rated, elo_prob[rated])
+    else:
+        provider_rated = elo_rated = dict.fromkeys(provider, float("nan"))
+
     return {
         **{f"baseline_majority_{k}": v for k, v in majority.items()},
         **{f"baseline_elo_{k}": v for k, v in elo.items()},
         **{f"baseline_provider_elo_{k}": v for k, v in provider.items()},
         "baseline_provider_elo_coverage": coverage,
+        "baseline_provider_elo_rated_rows": float(rated.sum()),
+        **{f"baseline_provider_elo_rated_{k}": v for k, v in provider_rated.items()},
+        **{f"baseline_elo_rated_{k}": v for k, v in elo_rated.items()},
     }
 
 
@@ -234,11 +263,12 @@ def covered_comparison(
 ) -> dict[str, float]:
     """Model against provider Elo on only the matches the provider has a rating for.
 
-    The headline comparison fills a missing provider rating with 0.5, so the bar
-    is never set on a friendlier subset -- but a coin flip on those matches
-    flatters the model. Scoring both on the covered matches alone is the fair
-    head-to-head: it answers whether the model beats the provider where the
-    provider has something to say. ``provider_raw`` is NaN where it has not.
+    This is the success criterion. The comparison on all test matches fills a
+    missing provider rating with 0.5, and a coin flip on those matches flatters
+    the model: at MS2 it turned a gap of +0.018 on the rated matches into
+    -0.064 overall. Scoring both on the rated matches alone answers whether the
+    model beats the provider where the provider has something to say.
+    ``provider_raw`` is NaN where it has not.
     """
     covered = np.isfinite(provider_raw)
     n = int(covered.sum())

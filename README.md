@@ -113,9 +113,21 @@ A few design decisions carry most of the weight:
   promote the first trained model by default: the training pipeline first
   registers the provider's Elo as a model (`training/baseline.py`, reading
   `provider_elo_prob`, 0.5 where the provider has no rating) and makes it the
-  champion. A trained model is served only once it beats it on the same test
-  matches by `min_improvement`, like any later candidate.
+  champion. A trained model is served only once it beats it by
+  `min_improvement` on the test matches the provider has a rating for: on the
+  others the provider is a 0.5 fill, and beating a coin flip there is not
+  beating the provider. Only when the provider rates fewer than
+  `min_comparison_rows` test matches (no ranking history, as on the free plan)
+  is the whole test set used, and the promotion reason says so.
   `training.promotion.provider_elo_first_champion: false` turns this off.
+- **The success criterion is measured where the provider has a rating.** The
+  model beats the provider's Elo only if the whole 95 % bootstrap interval of
+  the log-loss difference lies below zero on the rated test matches
+  (`covered_*` metrics, tag `success_criterion_met`). The same gap on all test
+  matches is still logged, but with an unrated match at 0.5 it flatters the
+  model: at MS2 it read −0.064 while the rated matches gave +0.018. The training
+  summary, the experiment tables and `padel data-report` all lead with the rated
+  matches, and the report scores the in-house Elo on the same matches.
 
 ---
 
