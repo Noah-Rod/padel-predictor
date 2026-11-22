@@ -224,15 +224,45 @@ HOPSWORKS_RETRY_DELAYS: tuple[float, ...] = (5.0, 20.0, 60.0)
 _sleep = time.sleep
 
 
-def _is_transient(exc: BaseException) -> bool:
-    """A dropped or refused connection, as opposed to an error in the request."""
-    if isinstance(exc, ConnectionError | TimeoutError):
-        return True
+def _transient_types() -> tuple[type[BaseException], ...]:
+    types: list[type[BaseException]] = [ConnectionError, TimeoutError]
     try:
         import requests
+
+        types += [requests.exceptions.ConnectionError, requests.exceptions.Timeout]
     except ModuleNotFoundError:  # pragma: no cover -- requests ships with hopsworks
-        return False
-    return isinstance(exc, requests.exceptions.ConnectionError | requests.exceptions.Timeout)
+        pass
+    try:
+        # Reads go through the Hopsworks Query Service over Arrow Flight, which
+        # times out now and then under load ("Deadline Exceeded").
+        from pyarrow import flight
+
+        types += [flight.FlightTimedOutError, flight.FlightUnavailableError]
+    except ImportError:  # pragma: no cover -- a pyarrow build without Flight
+        pass
+    return tuple(types)
+
+
+def _is_transient(exc: BaseException) -> bool:
+    """A dropped connection or a backend hiccup, as opposed to an error in the request.
+
+    hsfs wraps the errors of its transports in its own ``FeatureStoreException``,
+    so the whole chain of causes is checked, not only the outer exception.
+    """
+    types = _transient_types()
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, types):
+            return True
+        # A Delta merge that loses a read from the store's HDFS fails before it
+        # commits, so the upsert can run again. Other Delta errors (a schema
+        # mismatch) are matched out by the message.
+        if type(current).__name__ == "DeltaError" and "ObjectStore error" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _with_reconnect(action: str, call: Callable[[], T]) -> T:

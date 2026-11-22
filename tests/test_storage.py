@@ -224,3 +224,74 @@ def test_a_bad_request_is_not_retried(monkeypatch):
     with pytest.raises(ValueError):
         storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
     assert len(attempts) == 1
+
+
+class FeatureStoreException(Exception):
+    """Stands in for hsfs's wrapper around the errors of its transports."""
+
+
+class DeltaError(Exception):
+    """Stands in for deltalake's error, matched by name like the real one."""
+
+
+def _flaky_read_store(attempts, first_error):
+    class Store:
+        def get_feature_group(self, name, version):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise first_error
+            return None
+
+    return Store()
+
+
+def test_a_query_service_timeout_wrapped_by_hsfs_is_retried(monkeypatch):
+    from pyarrow import flight
+
+    # What hsfs raised on 22.11.2026: a Flight timeout, wrapped.
+    try:
+        try:
+            raise flight.FlightTimedOutError("Deadline Exceeded")
+        except flight.FlightTimedOutError as inner:
+            raise FeatureStoreException(
+                "Could not read data using Hopsworks Query Service."
+            ) from inner
+    except FeatureStoreException as wrapped:
+        error = wrapped
+
+    attempts = []
+    store = _flaky_read_store(attempts, error)
+    feature_store = lambda project: store  # noqa: E731
+    feature_store.cache_clear = lambda: None
+    monkeypatch.setattr(storage, "_feature_store", feature_store)
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+
+    frame = storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
+    assert frame.empty
+    assert len(attempts) == 2
+
+
+def test_a_lost_hdfs_read_during_a_delta_merge_is_retried(monkeypatch):
+    error = DeltaError(
+        "Generic DeltaTable error: Parquet error: External: Generic HdfsObjectStore error: "
+        "Operation failed: Failed to read 8 bytes from 8791 with result value 0"
+    )
+    attempts = []
+    store = _flaky_read_store(attempts, error)
+    feature_store = lambda project: store  # noqa: E731
+    feature_store.cache_clear = lambda: None
+    monkeypatch.setattr(storage, "_feature_store", feature_store)
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+
+    storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
+    assert len(attempts) == 2
+
+
+def test_a_delta_schema_error_is_not_retried(monkeypatch):
+    attempts = []
+    store = _flaky_read_store(attempts, DeltaError("Schema error: Cannot cast column"))
+    monkeypatch.setattr(storage, "_feature_store", lambda project: store)
+    monkeypatch.setattr(storage, "_sleep", lambda s: None)
+    with pytest.raises(DeltaError):
+        storage.read_dataset("hopsworks://padel_predictor", storage.RAW_RANKINGS)
+    assert len(attempts) == 1
