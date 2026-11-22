@@ -105,6 +105,23 @@ def test_a_window_fits_only_on_its_last_months(settings, window_config, stored_f
     assert window.vs_reference["ci_low"] <= window.vs_reference["ci_high"]
 
 
+def test_a_window_works_on_timestamps_without_a_time_zone(settings, window_config, many_matches):
+    """Hopsworks returns ``played_at`` without a time zone, the Parquet store with
+    UTC. The first run against the live store failed on comparing the two."""
+    features = build_feature_frame(many_matches, window_config.features)
+    aware = experiments_rows(settings, window_config, features)
+    features["played_at"] = features["played_at"].dt.tz_localize(None)
+    naive = experiments_rows(settings, window_config, features)
+
+    assert naive == aware
+
+
+def experiments_rows(settings, config, features):
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    report = experiments.run_training_window(settings=settings, config=config, track=False)
+    return [(v.label, v.train_rows) for v in report.variants]
+
+
 def test_windows_that_change_nothing_or_hold_too_little_are_skipped(
     settings, window_config, stored_features
 ):

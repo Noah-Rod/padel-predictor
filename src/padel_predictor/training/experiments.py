@@ -247,6 +247,11 @@ def run_training_window(
 
     split = load_split(settings, config)
     played = pd.to_datetime(split.meta_train["played_at"], utc=True)
+    # Hopsworks returns timestamps without a time zone; they are UTC.
+    train_end = pd.Timestamp(split.train_end)
+    train_end = (
+        train_end.tz_localize("UTC") if train_end.tzinfo is None else train_end.tz_convert("UTC")
+    )
     everything = np.ones(len(split.y_train), dtype=bool)
     reference, proba = _fit_and_score(
         split, "all history", FEATURE_COLUMNS, everything, config, None
@@ -254,7 +259,7 @@ def run_training_window(
 
     variants, skipped = [reference], []
     for m in months:
-        mask = (played >= split.train_end - pd.DateOffset(months=m)).to_numpy()
+        mask = (played >= train_end - pd.DateOffset(months=m)).to_numpy()
         if mask.all():
             skipped.append(f"{m} months (covers all history)")
             continue
