@@ -3,10 +3,10 @@
 **Noah Rodriguez** · [github.com/Noah-Rod/padel-predictor](https://github.com/Noah-Rod/padel-predictor)
 
 > Working draft for `docs/ms3_summary.pdf` (due 03.12.2026, at most 2 pages).
-> Section 2 answers every MS2 point as of 22.11. Before exporting: refresh the
-> numbers in section 1 after the ranking backfill, add the ablation and
-> training-window tables, state the measured ranking delay under A1, and delete
-> this block.
+> Section 2 answers every MS2 point as of 22.11, and the numbers are from the
+> runs of 22.11. Before exporting: rerun training and the experiments and
+> refresh the tables, state the measured ranking delay under A1, cut the text
+> to two pages, and delete this block.
 
 ## 1 What I achieved in this milestone
 
@@ -15,7 +15,7 @@
 - **Training runs on a schedule and on new data.** After every successful feature run and on Mondays, on the features of 6,554 labelled matches from February 2023 to November 2026. Every run is a W&B run with its parameters, metrics, baselines and the promotion reason; every candidate is a versioned model artifact and only a promoted one gets the `champion` alias.
 - **A champion is judged on matches it has never seen.** The test set is the newest fifth of the store, so backfilling 2023 and 2024 moved it back onto matches champion v2 had been trained on. Each model records its last training match, and candidate and champion are compared only after it (`b7e529e`).
 - **The provider's Elo is the bar for serving.** It is the first champion of an empty registry, and any candidate has to beat it on the matches the provider has a rating for before it is served (`4b3eda3`, `5ea6cb8`, `304b4d5`).
-- **Experiments on the training split.** `padel ablation` drops partnership, form and rest in turn; `padel training-window` fits on the last 30 to 6 months only. Both score every variant against the provider's Elo on the rated matches and against the full model (`e27e541`, `d61124c`).
+- **Experiments on the training split.** `padel ablation` drops partnership, form and rest in turn; `padel training-window` fits on the last 30 to 6 months only. Both score every variant against the provider's Elo on the rated matches and against the full model (`e27e541`, `d61124c`); both ran on the live store on 22.11, tables below.
 
 **Key decisions, and why.**
 
@@ -35,6 +35,30 @@
 | Model − provider, 95 % CI | **−0.011 [−0.032, +0.011]: not met** | [−0.078, −0.036], flattered by the 0.5 fill |
 
 The model is ahead of the provider on the rated matches on average, but the interval still includes zero: **the success criterion is not met.** No candidate has replaced champion v2 since the 2023 backfill; the latest was 0.001 ahead of it on the 1,297 test matches v2 has not seen, short of the 0.002 a promotion needs.
+
+**What partnership, form and rest add (MS1 point E3).** `padel ablation` on the same split, each feature dropped in turn; the last column is the variant's log loss minus the full model's on the same test matches (negative: better without the feature):
+
+| Dropped | Log loss | vs provider Elo, rated matches | vs all features |
+| --- | ---: | ---: | ---: |
+| none | 0.4874 | −0.0106 [−0.0319, +0.0105] | – |
+| partnership | 0.4880 | −0.0125 [−0.0331, +0.0088] | +0.0006 [−0.0062, +0.0071] |
+| form | 0.4856 | −0.0138 [−0.0343, +0.0065] | −0.0018 [−0.0053, +0.0015] |
+| rest | 0.4869 | −0.0113 [−0.0320, +0.0091] | −0.0005 [−0.0037, +0.0025] |
+
+None of the three adds anything I can measure: every interval against the full model includes zero, and without form the model is, if anything, slightly better. What carries the model is the in-house Elo, the ranking points and the tier. I keep the three features for now and decide at MS4, on more test matches, whether to drop them.
+
+**Does old history hurt?** Since the 2023 backfill no retrained model has beaten champion v2, so `padel training-window` fits only on the last N months (features still built from all history):
+
+| Fitted on | Matches | Log loss | vs provider Elo, rated matches | vs all history |
+| --- | ---: | ---: | ---: | ---: |
+| all history | 5,245 | 0.4874 | −0.0106 [−0.0319, +0.0105] | – |
+| last 30 months | 4,701 | 0.4833 | −0.0172 [−0.0377, +0.0040] | −0.0041 [−0.0098, +0.0019] |
+| last 24 months | 3,903 | 0.4876 | −0.0106 [−0.0311, +0.0119] | +0.0002 [−0.0064, +0.0072] |
+| last 18 months | 2,809 | 0.4882 | −0.0102 [−0.0316, +0.0122] | +0.0008 [−0.0079, +0.0096] |
+| last 12 months | 2,070 | 0.4944 | −0.0070 [−0.0300, +0.0155] | +0.0070 [−0.0026, +0.0170] |
+| last 6 months | 1,048 | 0.4863 | −0.0103 [−0.0295, +0.0097] | −0.0011 [−0.0124, +0.0110] |
+
+No window is reliably better or worse than all history, so old matches are not what holds the candidates back; dropping 2023 (last 30 months) comes closest. The model trains on all history.
 
 ## 2 Response to MS2 reviews
 
