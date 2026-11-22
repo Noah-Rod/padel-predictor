@@ -403,6 +403,13 @@ class Memoriser:
         return np.column_stack([1 - p, p])
 
 
+class CoinFlip:
+    """A trained champion that knows nothing: every candidate beats it."""
+
+    def predict_proba(self, x):
+        return np.full((len(x), 2), 0.5)
+
+
 def _register_champion(settings, model, train_end, *, in_metadata: bool = True):
     with registry.start_run(settings) as run:
         if not in_metadata:
@@ -617,6 +624,48 @@ def test_the_provider_elo_champion_is_compared_on_all_matches_without_ratings(
     assert result.comparison_rows == result.test_rows
     assert "which rates only 0 of them" in result.reason
     assert result.promoted
+
+
+def test_beating_a_trained_champion_is_not_enough_without_beating_the_provider(
+    settings, small_window_config, features
+):
+    """A registry that already holds a trained champion never started from the
+    provider's Elo, so the bar is checked on every promotion (review point B1)."""
+    from padel_predictor.common import storage
+
+    config = small_window_config
+    # A provider that is nearly always right cannot be beaten.
+    won = features["team_a_won"].astype("float64")
+    features = features.assign(provider_elo_prob=0.05 + 0.9 * won)
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    split = time_split(features, config.training.test_fraction)
+    _register_champion(settings, CoinFlip(), split.train_end)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    assert result.champion_metrics["log_loss"] > result.metrics["log_loss"]
+    assert "log_loss improved" in result.reason
+    assert "but against the provider's Elo" in result.reason
+    assert not result.promoted
+    assert isinstance(registry.load_champion(settings).model, CoinFlip)
+
+
+def test_a_candidate_that_beats_both_replaces_a_trained_champion(
+    settings, small_window_config, features
+):
+    from padel_predictor.common import storage
+
+    config = small_window_config
+    # A provider that rates every match but knows nothing about it.
+    features = features.assign(provider_elo_prob=0.5)
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+    split = time_split(features, config.training.test_fraction)
+    _register_champion(settings, CoinFlip(), split.train_end)
+
+    result = pipeline.run(settings=settings, config=config, register=True)
+
+    assert result.promoted
+    assert "provider" not in result.reason
 
 
 def test_a_model_that_does_not_beat_the_provider_is_not_served(settings, config, features):

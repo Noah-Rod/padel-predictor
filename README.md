@@ -129,7 +129,10 @@ A few design decisions carry most of the weight:
   others the provider is a 0.5 fill, and beating a coin flip there is not
   beating the provider. Only when the provider rates fewer than
   `min_comparison_rows` test matches (no ranking history, as on the free plan)
-  is the whole test set used, and the promotion reason says so.
+  is the whole test set used, and the promotion reason says so. A candidate
+  that beats a trained champion has to pass the same bar before it replaces it:
+  a registry that already held trained models never started from the provider's
+  Elo, and beating such a champion says nothing about beating the provider.
   `training.promotion.provider_elo_first_champion: false` turns this off.
 - **The success criterion is measured where the provider has a rating.** The
   model beats the provider's Elo only if the whole 95 % bootstrap interval of

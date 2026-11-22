@@ -277,6 +277,11 @@ def compare_with_champion(
     beaten the provider anywhere. Only when the provider rates fewer than
     ``min_comparison_rows`` test matches -- no ranking history, as on the free
     plan -- is the whole test set used, and the reason says so.
+
+    A candidate that beats a trained champion must pass the same bar before it
+    is served (:func:`beats_provider_elo_where_rated`): a registry that already
+    held a trained champion never started from the provider's Elo, and beating
+    that champion says nothing about beating the provider.
     """
     promotion = config.training.promotion
     rule = {
@@ -336,12 +341,49 @@ def compare_with_champion(
     promote, reason = registry.should_promote(
         candidate=candidate_metrics, champion=champion_metrics, **rule
     )
+    reason = f"{reason} on {scope}"
+    if promote and getattr(champion.model, "trained_on_matches", True):
+        gate = beats_provider_elo_where_rated(model, split, config)
+        if gate is not None and not gate[0]:
+            promote, reason = False, f"{reason}, but {gate[1]}"
     return ChampionComparison(
         promote,
-        f"{reason} on {scope}",
+        reason,
         rows=rows,
         candidate_metrics=candidate_metrics,
         champion_metrics=champion_metrics,
+    )
+
+
+def beats_provider_elo_where_rated(
+    model: Any, split: Split, config: PipelineConfig
+) -> tuple[bool, str] | None:
+    """Whether a candidate beats the provider's Elo on the rated test matches.
+
+    The bar every trained model passes before it is served, by the same
+    ``min_improvement`` as any promotion. ``None`` when the bar does not apply:
+    ``provider_elo_first_champion`` is off, or the provider rates fewer than
+    ``min_comparison_rows`` test matches.
+    """
+    promotion = config.training.promotion
+    rated = rated_by_provider(split)
+    rows = int(rated.sum())
+    if not promotion.provider_elo_first_champion or rows < promotion.min_comparison_rows:
+        return None
+    y = split.y_test.loc[rated]
+    frame = split.meta_test.loc[rated]
+    provider = ProviderEloModel()
+    promote, reason = registry.should_promote(
+        candidate=classification_metrics(y, model.predict_proba(model_inputs(model, frame))[:, 1]),
+        champion=classification_metrics(
+            y, provider.predict_proba(model_inputs(provider, frame))[:, 1]
+        ),
+        metric=promotion.metric,
+        higher_is_better=promotion.higher_is_better,
+        min_improvement=promotion.min_improvement,
+    )
+    return promote, (
+        f"against the provider's Elo on the {rows} test matches it has a rating for: {reason}"
     )
 
 
