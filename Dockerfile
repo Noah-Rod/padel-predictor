@@ -29,6 +29,7 @@ COPY README.md ./
 COPY src/ src/
 COPY config/ config/
 COPY ui/ ui/
+COPY .streamlit/ .streamlit/
 RUN uv sync --frozen --no-dev --extra hopsworks
 
 # --- runtime stage: the built environment, without the compiler ----------------

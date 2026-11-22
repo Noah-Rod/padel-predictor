@@ -184,6 +184,22 @@ uv run padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 0
 
 `make help` lists the same steps as short targets.
 
+### The front end
+
+`ui/app.py` is one Streamlit page with three views:
+
+| View | What it shows |
+| --- | --- |
+| **Upcoming matches** | Every scheduled match in the horizon with the champion's favourite and its chance. Selecting a row shows the prediction and both pairs' Elo, form, rest and matches together. |
+| **Matchup builder** | Any four players and any tier. It starts from a scheduled match, one click from the upcoming table, and keeps that match's date, so the unchanged matchup gives the scheduled prediction and swapping a player answers "what if". |
+| **Track record** | The stored predictions scored against the results that came in later: the last prediction before each match, favourite-won rate and log loss per week, next to the provider's Elo on the matches it rates. |
+
+The page loads the champion and the store in its own process and reads them
+again after an hour, or on "Reload now". What it shows is computed in
+[`inference/dashboard.py`](src/padel_predictor/inference/dashboard.py) and
+tested there; the pair values come from the same rolling state the features
+are built from.
+
 **Windows.** The Hopsworks client depends on `twofish`, which only ships as
 source code and needs Microsoft C++ Build Tools to compile. It is therefore an
 optional extra: plain `uv sync` installs everything else, and the offline
