@@ -193,8 +193,8 @@ class Predictor:
                     "team_a_player_2": team_a[1],
                     "team_b_player_1": team_b[0],
                     "team_b_player_2": team_b[1],
-                    "team_a_rank_points": _team_points(rank_points, team_a),
-                    "team_b_rank_points": _team_points(rank_points, team_b),
+                    "team_a_rank_points": sum(rank_points.get(p, 0.0) for p in team_a),
+                    "team_b_rank_points": sum(rank_points.get(p, 0.0) for p in team_b),
                     "winner": None,
                 }
             ]
@@ -249,17 +249,6 @@ def _recent_rank_points(history: pd.DataFrame) -> dict[str, float]:
             if pd.notna(total):
                 points[str(player)] = float(total) / 2.0
     return points
-
-
-def _team_points(rank_points: dict[str, float], team: tuple[str, str]) -> float | None:
-    """A pair's combined points, or ``None`` when a player's points are unknown.
-
-    Unknown is not 0 points: the feature builder leaves the difference missing,
-    as it does for every training row.
-    """
-    if any(player not in rank_points for player in team):
-        return None
-    return sum(rank_points[player] for player in team)
 
 
 def known_players(history: pd.DataFrame) -> list[str]:
