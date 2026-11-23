@@ -235,6 +235,8 @@ class FakePadelApi:
         for prefix, response in list(self.fail_first.items()):
             if path.startswith(prefix):
                 del self.fail_first[prefix]
+                if isinstance(response, Exception):
+                    raise response
                 return response
         page = int(params.get("page", 1))
         if path == "/api/tournaments":
@@ -324,6 +326,30 @@ def test_a_rate_limit_waits_for_retry_after_then_retries(monkeypatch):
     out = _source(monkeypatch, api, sleeps=sleeps).fetch(dt.date(2026, 3, 1), dt.date(2026, 3, 31))
     assert 30.0 in sleeps
     assert not out.empty
+
+
+def test_a_connection_closed_mid_answer_is_retried(monkeypatch):
+    """A backfill of 23.11.2026 ended on one ``RemoteProtocolError`` from the provider."""
+    dropped = httpx.RemoteProtocolError("peer closed connection without sending complete message")
+    api = FakePadelApi(fail_first={"/api/rankings": dropped})
+    sleeps: list[float] = []
+    out = _source(monkeypatch, api, sleeps=sleeps).fetch_rankings(
+        dt.date(2026, 3, 1), dt.date(2026, 3, 10)
+    )
+    assert 1.0 in sleeps
+    assert set(out["player"]) == {"P men", "P women"}
+
+
+def test_a_connection_that_keeps_dropping_ends_the_run(monkeypatch):
+    def always_dropped(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    sleeps: list[float] = []
+    source = _source(monkeypatch, always_dropped, sleeps=sleeps, max_retries=2)
+    with pytest.raises(httpx.ReadTimeout):
+        source.fetch(dt.date(2026, 3, 1), dt.date(2026, 3, 31))
+    # Two retries with a growing wait, then the error surfaces.
+    assert [s for s in sleeps if s in (1.0, 2.0, 4.0)] == [1.0, 2.0]
 
 
 def test_an_exhausted_daily_quota_stops_the_run(monkeypatch):

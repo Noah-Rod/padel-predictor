@@ -275,7 +275,19 @@ class _PadelApiClient:
         for attempt in range(self.config.max_retries + 1):
             self._pace()
             self.requests += 1
-            response = self._http.get(path, params=params)
+            try:
+                response = self._http.get(path, params=params)
+            except httpx.TransportError as exc:
+                # A timeout or a connection the server closed half-way through
+                # the answer. The transport's own retries only cover connecting,
+                # and one such drop would otherwise end an hour-long backfill.
+                if attempt >= self.config.max_retries:
+                    raise
+                logger.warning(
+                    "%s on %s, retrying in %.0fs", type(exc).__name__, path, 2.0**attempt
+                )
+                self._sleep(2.0**attempt)
+                continue
             if response.status_code == 429:
                 retry_after = float(response.headers.get("Retry-After", 60))
                 if retry_after > self.config.max_retry_after_seconds:
