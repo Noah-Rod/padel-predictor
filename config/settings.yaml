@@ -101,7 +101,7 @@ training:
     # The K is chosen on forward-chaining validation folds inside the training
     # period (each fold is predicted by a model fitted on everything before it);
     # the test set only shows what the choice is worth.
-    factors: [12, 16, 20, 24, 32, 40]
+    factors: [12, 16, 20, 24, 32, 40, 48, 64]
     validation_folds: 4
 
 inference:

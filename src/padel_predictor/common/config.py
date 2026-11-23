@@ -173,7 +173,9 @@ class TrainingWindowConfig(BaseModel):
 
 class EloKConfig(BaseModel):
     # `padel elo-k` rebuilds the features with each K-factor for the in-house Elo.
-    factors: list[float] = Field(default_factory=lambda: [12.0, 16.0, 20.0, 24.0, 32.0, 40.0])
+    factors: list[float] = Field(
+        default_factory=lambda: [12.0, 16.0, 20.0, 24.0, 32.0, 40.0, 48.0, 64.0]
+    )
     # The K is chosen on this many forward-chaining folds of the training period.
     validation_folds: int = 4
 
