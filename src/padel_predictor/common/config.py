@@ -171,6 +171,13 @@ class TrainingWindowConfig(BaseModel):
     months: list[int] = Field(default_factory=lambda: [30, 24, 18, 12, 6])
 
 
+class EloKConfig(BaseModel):
+    # `padel elo-k` rebuilds the features with each K-factor for the in-house Elo.
+    factors: list[float] = Field(default_factory=lambda: [12.0, 16.0, 20.0, 24.0, 32.0, 40.0])
+    # The K is chosen on this many forward-chaining folds of the training period.
+    validation_folds: int = 4
+
+
 class TrainingConfig(BaseModel):
     test_fraction: float = 0.2
     min_training_rows: int = 200
@@ -180,6 +187,7 @@ class TrainingConfig(BaseModel):
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     ablation: AblationConfig = Field(default_factory=AblationConfig)
     training_window: TrainingWindowConfig = Field(default_factory=TrainingWindowConfig)
+    elo_k: EloKConfig = Field(default_factory=EloKConfig)
 
 
 class InferenceConfig(BaseModel):

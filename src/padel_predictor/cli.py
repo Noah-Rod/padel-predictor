@@ -9,6 +9,7 @@ developer all start the same code the same way::
     padel training-pipeline
     padel ablation
     padel training-window
+    padel elo-k
     padel inference-pipeline
     padel matchup --team-a "Player 01,Player 02" --team-b "Player 03,Player 04"
     padel serve
@@ -119,6 +120,18 @@ def training_window(
     from padel_predictor.training import experiments
 
     typer.echo(experiments.run_training_window(track=track).to_markdown())
+
+
+@app.command("elo-k")
+def elo_k(
+    track: bool = typer.Option(
+        True, "--track/--no-track", help="Log every variant as a run (never as a model)."
+    ),
+) -> None:
+    """Rebuild the features with each K-factor in elo_k.factors and compare the variants."""
+    from padel_predictor.training import experiments
+
+    typer.echo(experiments.run_elo_k(track=track).to_markdown())
 
 
 @app.command("inference-pipeline")

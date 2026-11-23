@@ -3,6 +3,7 @@ name: Experiments
 # On demand, on the same split as the training pipeline:
 #   ablation         retrain without partnership, form and rest in turn
 #   training-window  fit only on the last N months before the test set
+#   elo-k            rebuild the features with other K-factors for the in-house Elo
 # Every variant is logged to W&B with the experiment as its job type. Nothing
 # is registered or promoted.
 on:
@@ -11,7 +12,7 @@ on:
       experiment:
         description: "Which experiment to run"
         type: choice
-        options: [all, ablation, training-window]
+        options: [all, ablation, training-window, elo-k]
         default: all
 
 permissions:
@@ -63,3 +64,9 @@ jobs:
         run: |
           echo "" >> "$GITHUB_STEP_SUMMARY"
           uv run padel training-window | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Elo K-factor
+        if: inputs.experiment == 'all' || inputs.experiment == 'elo-k'
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          uv run padel elo-k | tee -a "$GITHUB_STEP_SUMMARY"

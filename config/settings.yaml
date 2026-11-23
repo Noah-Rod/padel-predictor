@@ -95,6 +95,14 @@ training:
     # test set, for each N, and compares it with the model on all history. The
     # features are still built from the whole history; only the fit is limited.
     months: [30, 24, 18, 12, 6]
+  elo_k:
+    # `padel elo-k` rebuilds the features from the raw matches with each of these
+    # K-factors for the in-house Elo and compares them with features.elo_k_factor.
+    # The K is chosen on forward-chaining validation folds inside the training
+    # period (each fold is predicted by a model fitted on everything before it);
+    # the test set only shows what the choice is worth.
+    factors: [12, 16, 20, 24, 32, 40]
+    validation_folds: 4
 
 inference:
   # How far ahead the batch inference pipeline looks for unplayed matches.

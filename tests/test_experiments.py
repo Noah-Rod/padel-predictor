@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -153,3 +154,100 @@ def test_a_window_must_be_positive(settings, config, stored_features):
     config.training.training_window.months = [0]
     with pytest.raises(ValueError, match="positive"):
         experiments.run_training_window(settings=settings, config=config, track=False)
+
+
+# --------------------------------------------------------------------------- #
+# Elo K-factor
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def k_config(config):
+    config = config.model_copy(deep=True)
+    config.training.elo_k.factors = [16, 32]
+    config.training.elo_k.validation_folds = 2
+    return config
+
+
+@pytest.fixture
+def stored_matches(settings, many_matches):
+    storage.write_snapshot(many_matches, settings.feature_store_uri, storage.RAW_MATCHES)
+    return many_matches
+
+
+def test_each_k_factor_is_a_variant_next_to_the_current_one(settings, k_config, stored_matches):
+    report = experiments.run_elo_k(settings=settings, config=k_config, track=False)
+
+    # The K in features.elo_k_factor is the reference, whether listed or not.
+    assert [v.elo_k for v in report.variants] == [24.0, 16.0, 32.0]
+    assert report.variants[0].vs_reference is None
+    for variant in report.variants[1:]:
+        gap = variant.vs_reference
+        assert gap["ci_low"] <= gap["mean"] <= gap["ci_high"]
+    # Same matches on each side of the split for every K.
+    assert len({v.train_rows for v in report.variants}) == 1
+
+
+def test_the_k_factor_is_chosen_on_the_validation_folds(settings, k_config, stored_matches):
+    report = experiments.run_elo_k(settings=settings, config=k_config, track=False)
+
+    best = min(report.variants, key=lambda v: v.validation_log_loss)
+    assert [v.selected for v in report.variants].count(True) == 1
+    assert best.selected
+    markdown = report.to_markdown()
+    assert markdown.count("(chosen)") == 1
+    verdict = markdown.splitlines()[-1]
+    assert f"K = {best.elo_k:g}" in verdict
+    # A K other than the current one comes with its interval against the current one.
+    assert best.elo_k == 24.0 or "against K = 24 now" in verdict
+    # No provider rating in this store: the in-house Elo on rated matches is missing.
+    assert "nan" not in markdown
+
+
+def test_the_validation_folds_never_read_the_test_set(settings, k_config, stored_matches):
+    features = build_feature_frame(stored_matches, k_config.features)
+    split = time_split(features, k_config.training.test_fraction)
+    flipped = dataclasses.replace(split, y_test=1 - split.y_test, x_test=split.x_test * 0.0)
+
+    y, proba = experiments.validation_predictions(split, k_config, 2)
+    y_flipped, proba_flipped = experiments.validation_predictions(flipped, k_config, 2)
+
+    assert y.equals(y_flipped)
+    assert proba == pytest.approx(proba_flipped)
+    # Every fold is predicted from earlier matches only: the first block is never scored.
+    assert 0 < len(y) < len(split.y_train)
+    assert y.tolist() == split.y_train.iloc[-len(y) :].tolist()
+    with pytest.raises(ValueError, match="at least 1"):
+        experiments.validation_predictions(split, k_config, 0)
+
+
+def test_the_current_k_factor_reproduces_the_training_pipelines_model(
+    settings, k_config, stored_matches
+):
+    features = build_feature_frame(stored_matches, k_config.features)
+    storage.write_snapshot(features, settings.feature_store_uri, storage.FEATURES)
+
+    report = experiments.run_elo_k(settings=settings, config=k_config, track=False)
+    trained = pipeline.run(settings=settings, config=k_config, register=False)
+
+    assert report.variants[0].metrics == pytest.approx(trained.metrics)
+    assert report.variants[0].train_rows == trained.train_rows
+
+
+def test_k_factor_runs_are_tracked_under_their_own_experiment(settings, k_config, stored_matches):
+    experiments.run_elo_k(settings=settings, config=k_config, track=True)
+
+    root = Path(settings.local_registry_dir)
+    records = [json.loads(p.read_text()) for p in (root / "runs").glob("*.json")]
+    assert sorted(r["name"] for r in records) == ["elo-k-k-16", "elo-k-k-24", "elo-k-k-32"]
+    assert {r["tags"]["experiment"] for r in records} == {"elo-k"}
+    assert sorted(r["tags"]["chosen_on_validation"] for r in records) == ["False", "False", "True"]
+    assert all("validation_log_loss" in r["metrics"] for r in records)
+    assert not (root / settings.registered_model_name).exists()
+
+
+def test_a_k_factor_must_be_positive_and_the_store_must_hold_matches(settings, k_config):
+    with pytest.raises(RuntimeError, match="no raw matches"):
+        experiments.run_elo_k(settings=settings, config=k_config, track=False)
+
+    k_config.training.elo_k.factors = [0]
+    with pytest.raises(ValueError, match="positive"):
+        experiments.run_elo_k(settings=settings, config=k_config, track=False)

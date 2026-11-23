@@ -54,7 +54,7 @@ def time_split(features: pd.DataFrame, test_fraction: float = 0.2) -> Split:
         raise ValueError(
             f"test_fraction {test_fraction} leaves no training rows for {len(data)} matches"
         )
-    cutoff = _tournament_boundary(data, len(data) - n_test)
+    cutoff = tournament_boundary(data, len(data) - n_test)
     train, test = data.iloc[:cutoff], data.iloc[cutoff:]
 
     return Split(
@@ -70,7 +70,7 @@ def time_split(features: pd.DataFrame, test_fraction: float = 0.2) -> Split:
     )
 
 
-def _tournament_boundary(data: pd.DataFrame, cutoff: int) -> int:
+def tournament_boundary(data: pd.DataFrame, cutoff: int) -> int:
     """Move a row cutoff to the nearest tournament boundary.
 
     A tournament is never split between train and test: its early rounds would
