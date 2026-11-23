@@ -60,7 +60,7 @@ pair:
 
 | Feature | Team value |
 | --- | --- |
-| `elo_diff` | mean of the two players' in-house Elo (start 1500, K = 24) |
+| `elo_diff` | mean of the two players' in-house Elo (start 1500, K = 48) |
 | `rank_points_diff` | sum of the two players' official points, from the last ranking snapshot **published before** the match |
 | `form_diff` | mean of the two players' win rates over each player's last 5 matches, with any partner (0.5 without history) |
 | `rest_days_diff` | days since the pair's most recently active player last played, capped at 60 (14 if never seen) |

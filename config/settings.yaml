@@ -32,7 +32,11 @@ ingestion:
 features:
   # Elo rating state shared by training and inference (see common/features.py).
   elo_initial: 1500.0
-  elo_k_factor: 24.0
+  # 48 since 23.11.2026: `padel elo-k` on the live store picked it on the
+  # validation folds of the training period, 0.011 log loss ahead of the earlier
+  # 24 (95 % interval [-0.016, -0.006]); 64 was worse again. A model trained on
+  # another K must not be served on these features: retrain after changing it.
+  elo_k_factor: 48.0
   # Number of recent matches used for the rolling "form" feature.
   form_window: 5
   # The provider gives no publication time for a ranking snapshot. Every

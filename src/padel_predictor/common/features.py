@@ -30,7 +30,7 @@ player-level value is aggregated to the pair before the A-minus-B difference:
 =====================  =========================================================
 feature                team value
 =====================  =========================================================
-``elo_diff``           mean of the two players' in-house Elo (start 1500, K=24)
+``elo_diff``           mean of the two players' in-house Elo (start 1500, K=48)
 ``rank_points_diff``   sum of the two players' official points, from the last
                        snapshot published before the match (unranked = 0)
 ``form_diff``          mean of the two players' win rates over each player's last

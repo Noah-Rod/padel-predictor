@@ -125,7 +125,7 @@ class IngestionConfig(BaseModel):
 
 class FeatureConfig(BaseModel):
     elo_initial: float = 1500.0
-    elo_k_factor: float = 24.0
+    elo_k_factor: float = 48.0
     form_window: int = 5
     # A ranking snapshot counts as published this many days after its label
     # date, in a backfill and in a live run alike. None joins on the

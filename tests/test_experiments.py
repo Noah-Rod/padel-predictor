@@ -162,6 +162,7 @@ def test_a_window_must_be_positive(settings, config, stored_features):
 @pytest.fixture
 def k_config(config):
     config = config.model_copy(deep=True)
+    config.features.elo_k_factor = 24.0
     config.training.elo_k.factors = [16, 32]
     config.training.elo_k.validation_folds = 2
     return config
