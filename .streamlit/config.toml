@@ -1,0 +1,9 @@
+# Streamlit settings for the front end (ui/app.py). No secrets here.
+[theme]
+primaryColor = "#2a78d6"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

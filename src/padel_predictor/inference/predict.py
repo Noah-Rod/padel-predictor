@@ -142,8 +142,12 @@ class Predictor:
         history: pd.DataFrame,
         horizon_days: int | None = None,
         now: pd.Timestamp | None = None,
+        features: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Predict every unplayed match from today up to the horizon.
+
+        ``features`` is the feature frame of ``history`` when the caller has
+        already built it; it is built here otherwise.
 
         The window starts at midnight UTC today, not at ``now``: a match without
         an announced time is stored at midnight of its day, so a later match
@@ -154,7 +158,8 @@ class Predictor:
         horizon = horizon_days if horizon_days is not None else self.config.inference.horizon_days
         now = now or pd.Timestamp.now(tz="UTC")
 
-        features = build_feature_frame(history, self.config.features, rankings=self.rankings)
+        if features is None:
+            features = build_feature_frame(history, self.config.features, rankings=self.rankings)
         upcoming = unlabelled(features)
         start, cutoff = now.normalize(), now + pd.Timedelta(days=horizon)
         in_window = (upcoming["played_at"] >= start) & (upcoming["played_at"] <= cutoff)
@@ -163,7 +168,7 @@ class Predictor:
         logger.info("predicting %d upcoming matches within %d days", len(upcoming), horizon)
         return self.predict_frame(upcoming)
 
-    def predict_matchup(
+    def predict_matchup_row(
         self,
         history: pd.DataFrame,
         team_a: tuple[str, str],
@@ -171,12 +176,13 @@ class Predictor:
         tier: str = "p1",
         played_at: pd.Timestamp | None = None,
         tournament: str = "ad-hoc",
-    ) -> Prediction:
-        """Predict a hypothetical matchup that is not in the schedule.
+    ) -> pd.Series:
+        """The predicted feature row of a hypothetical matchup.
 
         The matchup is appended to the history as an unplayed match and the
         feature state is replayed, so the resulting row is built by the same
-        code that built every training row.
+        code that built every training row. The row carries the features next
+        to the probability, which is what the front end shows as the reason.
         """
         played_at = played_at or pd.Timestamp.now(tz="UTC") + pd.Timedelta(days=1)
         rank_points = _recent_rank_points(history)
@@ -213,7 +219,19 @@ class Predictor:
         if row.empty:  # pragma: no cover -- defensive
             raise RuntimeError("the ad-hoc match did not survive feature building")
 
-        predicted = self.predict_frame(row).iloc[0]
+        return self.predict_frame(row).iloc[0]
+
+    def predict_matchup(
+        self,
+        history: pd.DataFrame,
+        team_a: tuple[str, str],
+        team_b: tuple[str, str],
+        tier: str = "p1",
+        played_at: pd.Timestamp | None = None,
+        tournament: str = "ad-hoc",
+    ) -> Prediction:
+        """Predict a hypothetical matchup that is not in the schedule."""
+        predicted = self.predict_matchup_row(history, team_a, team_b, tier, played_at, tournament)
         return Prediction(
             match_id=AD_HOC_MATCH_ID,
             played_at=str(predicted["played_at"]),

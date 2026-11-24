@@ -386,6 +386,29 @@ def build_feature_frame(
     return features
 
 
+def replay_state(
+    raw_matches: pd.DataFrame,
+    config: FeatureConfig | None = None,
+) -> MatchState:
+    """The rolling state after every finished match in ``raw_matches``.
+
+    This is the state the next feature row would be built from. The front end
+    reads each pair's Elo, form, rest and partnership count from it, so what it
+    shows next to a prediction is what the model was given, not a second
+    calculation.
+    """
+    state = MatchState(config or get_pipeline_config().features)
+    matches = normalise_raw_matches(raw_matches)
+    for match in matches.loc[matches["winner"].notna()].itertuples(index=False):
+        state.update(
+            (match.team_a_player_1, match.team_a_player_2),
+            (match.team_b_player_1, match.team_b_player_2),
+            match.played_at,
+            int(match.winner == "A"),
+        )
+    return state
+
+
 def model_inputs(model: object, features: pd.DataFrame) -> pd.DataFrame:
     """The columns of a feature frame that ``model`` reads.
 

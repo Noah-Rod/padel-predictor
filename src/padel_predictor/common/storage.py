@@ -31,8 +31,9 @@ Parquet layout::
     <base>/features/ingest_date=YYYY-MM-DD/features.parquet
     <base>/predictions/run_date=YYYY-MM-DD/predictions.parquet
 
-Each run writes a new dated snapshot instead of overwriting, so any past state
-of the store can be reproduced.
+Each run writes a dated snapshot, so any past state of the store can be
+reproduced. Two writes on the same date share a snapshot: matches, rankings and
+predictions are upserted on their primary key, the features are replaced.
 """
 
 from __future__ import annotations
@@ -109,16 +110,44 @@ def write_snapshot(
     dataset: str,
     snapshot_date: dt.date | None = None,
 ) -> str:
-    """Write ``df`` as a new dated snapshot and return the URI written to."""
+    """Write ``df`` as the dated snapshot and return the URI written to.
+
+    A second write on the same date follows the Hopsworks contract: the
+    appended datasets are upserted on their primary key, so a backfill chunk
+    that ends today and the daily run of the same day both keep their rows.
+    The features are a full rebuild and replace that day's snapshot.
+    """
     snapshot_date = snapshot_date or dt.datetime.now(dt.UTC).date()
     if is_hopsworks(base_uri):
         return _hopsworks_write(df, base_uri, dataset, snapshot_date)
     target = snapshot_uri(base_uri, dataset, snapshot_date)
     if not is_remote(base_uri):
         Path(target).parent.mkdir(parents=True, exist_ok=True)
+    if dataset in _UPSERTED:
+        df = _upsert_into_snapshot(df, target, dataset)
     df.to_parquet(target, index=False)
     logger.info("wrote %d rows to %s", len(df), target)
     return target
+
+
+#: Datasets a run appends to. The features are rebuilt from scratch every run.
+_UPSERTED = frozenset({RAW_MATCHES, RAW_RANKINGS, PREDICTIONS})
+
+
+def _upsert_into_snapshot(df: pd.DataFrame, target: str, dataset: str) -> pd.DataFrame:
+    """``df`` merged into the snapshot already at ``target``, newest row per key."""
+    try:
+        stored = pd.read_parquet(target)
+    except (FileNotFoundError, OSError):
+        return df
+    if stored.empty:
+        return df
+    if df.empty:
+        return stored
+    # The partition already is the run date, the rest of the primary key remains.
+    key = [c for c in FEATURE_GROUPS[dataset].primary_key if c != _PARTITION_KEYS[dataset]]
+    merged = pd.concat([stored, df], ignore_index=True)
+    return merged.drop_duplicates(subset=key, keep="last", ignore_index=True)
 
 
 def _local_snapshot_files(base_uri: str, dataset: str) -> list[Path]:
