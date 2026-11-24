@@ -45,6 +45,44 @@ def test_rewriting_the_same_date_replaces_that_snapshot(tmp_path):
     assert storage.read_dataset(base, storage.FEATURES)["a"].tolist() == [9]
 
 
+def test_a_second_write_on_the_same_date_keeps_the_earlier_rows(tmp_path):
+    # A backfill chunk ending today and the daily run share one snapshot.
+    base = str(tmp_path / "store")
+    day = dt.date(2026, 1, 1)
+    first = pd.DataFrame({"match_id": ["m1", "m2"], "winner": ["A", None]})
+    second = pd.DataFrame({"match_id": ["m2", "m3"], "winner": ["B", None]})
+    storage.write_snapshot(first, base, storage.RAW_MATCHES, day)
+    storage.write_snapshot(second, base, storage.RAW_MATCHES, day)
+
+    stored = storage.read_dataset(base, storage.RAW_MATCHES).set_index("match_id")
+    assert sorted(stored.index) == ["m1", "m2", "m3"]
+    assert stored.loc["m2", "winner"] == "B"
+
+
+def test_an_empty_write_on_the_same_date_keeps_the_snapshot(tmp_path):
+    base = str(tmp_path / "store")
+    day = dt.date(2026, 1, 1)
+    rankings = pd.DataFrame(
+        {"player": ["p1"], "snapshot_date": [pd.Timestamp("2025-12-29")], "rank_points": [900.0]}
+    )
+    storage.write_snapshot(rankings, base, storage.RAW_RANKINGS, day)
+    storage.write_snapshot(rankings.iloc[0:0], base, storage.RAW_RANKINGS, day)
+    assert len(storage.read_dataset(base, storage.RAW_RANKINGS)) == 1
+
+
+def test_predictions_of_two_runs_on_one_day_are_both_kept(tmp_path):
+    # A match that started between the runs is no longer predicted by the second.
+    base = str(tmp_path / "store")
+    day = dt.date(2026, 1, 1)
+    morning = pd.DataFrame({"match_id": ["m1", "m2"], "probability_team_a": [0.6, 0.4]})
+    evening = pd.DataFrame({"match_id": ["m2"], "probability_team_a": [0.45]})
+    storage.write_snapshot(morning, base, storage.PREDICTIONS, day)
+    storage.write_snapshot(evening, base, storage.PREDICTIONS, day)
+
+    stored = storage.read_dataset(base, storage.PREDICTIONS).set_index("match_id")
+    assert stored["probability_team_a"].to_dict() == {"m1": 0.6, "m2": 0.45}
+
+
 def test_remote_uris_are_detected_and_joined():
     assert storage.is_remote("gs://bucket/prefix")
     assert not storage.is_remote("/local/path")
